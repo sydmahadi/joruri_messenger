@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'screens/bluetooth_devices_screen.dart';
 import 'services/device_service.dart';
 import 'services/local_storage_service.dart';
 
@@ -85,7 +86,15 @@ class HomeScreen extends StatelessWidget {
               width: double.infinity,
               height: 55,
               child: FilledButton.icon(
-                onPressed: () {},
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          const BluetoothDevicesScreen(),
+                    ),
+                  );
+                },
                 icon: const Icon(Icons.bluetooth),
                 label: const Text(
                   'কাছাকাছি ডিভাইস খুঁজুন',
@@ -112,7 +121,7 @@ class HomeScreen extends StatelessWidget {
             const Spacer(),
 
             Text(
-              'Device ID: ${DeviceService.deviceId.substring(0, 8)}...',
+              'Device ID: ${DeviceService.deviceId.length >= 8 ? DeviceService.deviceId.substring(0, 8) : DeviceService.deviceId}...',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontSize: 12,
