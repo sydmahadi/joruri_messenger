@@ -1,7 +1,18 @@
 import 'package:flutter/material.dart';
 
+import 'bluetooth_devices_screen.dart';
+
 class ConnectionScreen extends StatelessWidget {
   const ConnectionScreen({super.key});
+
+  void _openBluetooth(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const BluetoothDevicesScreen(),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +38,7 @@ class ConnectionScreen extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             'Internet ছাড়াই কাছাকাছি ফোনের সাথে '
-            'মেসেজ আদান-প্রদান করা যাবে।',
+            'মেসেজ আদান-প্রদান করুন।',
             style: TextStyle(
               fontSize: 14,
               color: Theme.of(context)
@@ -41,10 +52,11 @@ class ConnectionScreen extends StatelessWidget {
             icon: Icons.bluetooth,
             title: 'Bluetooth',
             description:
-                'কাছাকাছি ফোনের সাথে Bluetooth দিয়ে যুক্ত হন',
+                'কাছাকাছি জরুরি মেসেঞ্জার ফোন খুঁজে '
+                'Bluetooth-এর মাধ্যমে যুক্ত করুন।',
             buttonText: 'Bluetooth ডিভাইস খুঁজুন',
             onPressed: () {
-              // Bluetooth connection পরের ধাপে যুক্ত হবে।
+              _openBluetooth(context);
             },
           ),
 
@@ -54,10 +66,14 @@ class ConnectionScreen extends StatelessWidget {
             icon: Icons.wifi,
             title: 'Wi-Fi',
             description:
-                'একই Wi-Fi network-এ থাকা ফোনের সাথে যুক্ত হন',
-            buttonText: 'Wi-Fi ডিভাইস খুঁজুন',
+                'একই Wi-Fi network-এ থাকা ফোনের '
+                'সাথে local connection তৈরি করুন।',
+            buttonText: 'Wi-Fi connection',
             onPressed: () {
-              // Wi-Fi connection পরের ধাপে যুক্ত হবে।
+              _showComingSoon(
+                context,
+                'Wi-Fi connection পরের ধাপে চালু করা হবে।',
+              );
             },
           ),
 
@@ -67,10 +83,14 @@ class ConnectionScreen extends StatelessWidget {
             icon: Icons.wifi_tethering,
             title: 'Hotspot',
             description:
-                'একটি ফোনের Hotspot ব্যবহার করে local network তৈরি করুন',
+                'একটি ফোনের Hotspot ব্যবহার করে '
+                'Internet ছাড়াই local network তৈরি করুন।',
             buttonText: 'Hotspot connection',
             onPressed: () {
-              // Hotspot connection পরের ধাপে যুক্ত হবে।
+              _showComingSoon(
+                context,
+                'Hotspot connection পরের ধাপে চালু করা হবে।',
+              );
             },
           ),
 
@@ -92,8 +112,10 @@ class ConnectionScreen extends StatelessWidget {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'এই অ্যাপের local communication-এর জন্য '
-                      'mobile internet বা SMS প্রয়োজন হবে না।',
+                      'জরুরি মেসেঞ্জার Internet বা SMS-এর '
+                      'উপর নির্ভর করবে না। Bluetooth, Wi-Fi '
+                      'ও Hotspot-এর মাধ্যমে local communication '
+                      'ব্যবহার করা হবে।',
                       style: TextStyle(
                         fontSize: 14,
                         height: 1.5,
@@ -110,6 +132,19 @@ class ConnectionScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  void _showComingSoon(
+    BuildContext context,
+    String message,
+  ) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+        ),
+      );
   }
 }
 
