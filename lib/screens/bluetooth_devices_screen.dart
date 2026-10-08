@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-import '../services/bluetooth_service.dart';
+import '../services/bluetooth_service.dart' as local_bluetooth;
 
 class BluetoothDevicesScreen extends StatefulWidget {
   const BluetoothDevicesScreen({super.key});
@@ -15,7 +15,8 @@ class BluetoothDevicesScreen extends StatefulWidget {
 
 class _BluetoothDevicesScreenState
     extends State<BluetoothDevicesScreen> {
-  final BluetoothService _bluetoothService = BluetoothService();
+  final local_bluetooth.BluetoothService _bluetoothService =
+      local_bluetooth.BluetoothService();
 
   StreamSubscription<List<ScanResult>>? _devicesSubscription;
 
@@ -67,7 +68,10 @@ class _BluetoothDevicesScreenState
       }
 
       setState(() {
-        _error = e.toString().replaceFirst('Exception: ', '');
+        _error = e.toString().replaceFirst(
+              'Exception: ',
+              '',
+            );
       });
     } finally {
       if (!mounted) {
