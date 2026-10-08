@@ -40,9 +40,11 @@ class BluetoothService {
   Stream<String> get connectionStream =>
       _connectionController.stream;
 
-  BluetoothDevice? get connectedDevice => _connectedDevice;
+  BluetoothDevice? get connectedDevice =>
+      _connectedDevice;
 
-  bool get isConnected => _connectedDevice != null;
+  bool get isConnected =>
+      _connectedDevice != null;
 
   BluetoothService() {
     _nativeChannel.setMethodCallHandler(
@@ -55,7 +57,8 @@ class BluetoothService {
   ) async {
     switch (call.method) {
       case 'messageReceived':
-        final message = call.arguments?.toString() ?? '';
+        final message =
+            call.arguments?.toString() ?? '';
 
         if (message.isNotEmpty) {
           _messageController.add(message);
@@ -63,7 +66,8 @@ class BluetoothService {
         break;
 
       case 'deviceConnected':
-        final address = call.arguments?.toString() ?? '';
+        final address =
+            call.arguments?.toString() ?? '';
 
         _connectionController.add(
           'connected:$address',
@@ -71,7 +75,8 @@ class BluetoothService {
         break;
 
       case 'deviceDisconnected':
-        final address = call.arguments?.toString() ?? '';
+        final address =
+            call.arguments?.toString() ?? '';
 
         _connectionController.add(
           'disconnected:$address',
@@ -85,8 +90,9 @@ class BluetoothService {
         break;
 
       case 'bluetoothError':
-        final error = call.arguments?.toString() ??
-            'Bluetooth error';
+        final error =
+            call.arguments?.toString() ??
+                'Bluetooth error';
 
         _connectionController.add(
           'error:$error',
@@ -102,7 +108,8 @@ class BluetoothService {
       Permission.bluetoothAdvertise,
     ];
 
-    final result = await permissions.request();
+    final result =
+        await permissions.request();
 
     return result.values.every(
       (status) => status.isGranted,
@@ -114,7 +121,8 @@ class BluetoothService {
       final state =
           await FlutterBluePlus.adapterState.first;
 
-      return state == BluetoothAdapterState.on;
+      return state ==
+          BluetoothAdapterState.on;
     } catch (_) {
       return false;
     }
@@ -149,9 +157,7 @@ class BluetoothService {
       await _nativeChannel.invokeMethod(
         'stopAdvertising',
       );
-    } catch (_) {
-      // Ignore if the server is already stopped.
-    }
+    } catch (_) {}
   }
 
   Future<void> startScan() async {
@@ -174,6 +180,7 @@ class BluetoothService {
     }
 
     _devices.clear();
+
     _devicesController.add([]);
 
     await stopScan();
@@ -232,11 +239,10 @@ class BluetoothService {
   Future<void> stopScan() async {
     try {
       await FlutterBluePlus.stopScan();
-    } catch (_) {
-      // Scan may already be stopped.
-    }
+    } catch (_) {}
 
     await _scanSubscription?.cancel();
+
     _scanSubscription = null;
   }
 
@@ -262,9 +268,11 @@ class BluetoothService {
           seconds: 15,
         ),
         autoConnect: false,
+        license: License.free,
       );
     } catch (e) {
-      final errorText = e.toString();
+      final errorText =
+          e.toString();
 
       if (!errorText.contains(
         'already connected',
@@ -280,10 +288,13 @@ class BluetoothService {
     final services =
         await device.discoverServices();
 
-    BluetoothCharacteristic? targetCharacteristic;
+    BluetoothCharacteristic?
+        targetCharacteristic;
 
     for (final service in services) {
-      if (service.uuid.toString().toLowerCase() !=
+      if (service.uuid
+              .toString()
+              .toLowerCase() !=
           serviceUuid) {
         continue;
       }
@@ -300,12 +311,14 @@ class BluetoothService {
         }
       }
 
-      if (targetCharacteristic != null) {
+      if (targetCharacteristic !=
+          null) {
         break;
       }
     }
 
-    if (targetCharacteristic == null) {
+    if (targetCharacteristic ==
+        null) {
       await disconnect();
 
       throw Exception(
@@ -316,7 +329,9 @@ class BluetoothService {
     _characteristic =
         targetCharacteristic;
 
-    if (targetCharacteristic.properties.notify) {
+    if (targetCharacteristic
+        .properties
+        .notify) {
       await targetCharacteristic
           .setNotifyValue(true);
 
@@ -332,12 +347,9 @@ class BluetoothService {
             final message =
                 utf8.decode(value);
 
-            _messageController.add(
-              message,
-            );
-          } catch (_) {
-            // Ignore invalid data.
-          }
+            _messageController
+                .add(message);
+          } catch (_) {}
         },
       );
     }
@@ -379,9 +391,7 @@ class BluetoothService {
     if (device != null) {
       try {
         await device.disconnect();
-      } catch (_) {
-        // Ignore disconnect errors.
-      }
+      } catch (_) {}
     }
 
     _connectionController.add(
@@ -391,11 +401,15 @@ class BluetoothService {
 
   Future<void> dispose() async {
     await stopScan();
+
     await disconnect();
+
     await stopAdvertising();
 
     await _devicesController.close();
+
     await _messageController.close();
+
     await _connectionController.close();
   }
 }
