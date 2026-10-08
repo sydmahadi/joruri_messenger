@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart';
 
-void main() {
+import 'services/device_service.dart';
+import 'services/local_storage_service.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await LocalStorageService.init();
+  await DeviceService.initialize();
+
   runApp(const JoruriMessengerApp());
 }
 
@@ -31,7 +39,9 @@ class HomeScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text(
           'জরুরি মেসেঞ্জার',
-          style: TextStyle(fontWeight: FontWeight.bold),
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
         ),
         centerTitle: true,
       ),
@@ -100,6 +110,16 @@ class HomeScreen extends StatelessWidget {
             ),
 
             const Spacer(),
+
+            Text(
+              'Device ID: ${DeviceService.deviceId.substring(0, 8)}...',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 12,
+              ),
+            ),
+
+            const SizedBox(height: 8),
 
             const Text(
               'Offline communication • Emergency ready',
