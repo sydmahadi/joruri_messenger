@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/bluetooth_devices_screen.dart';
+import 'screens/connection_screen.dart';
 import 'services/device_service.dart';
 import 'services/local_storage_service.dart';
 
@@ -106,7 +106,7 @@ class _ChatScreenState extends State<ChatScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => const BluetoothDevicesScreen(),
+        builder: (_) => const ConnectionScreen(),
       ),
     );
   }
@@ -160,7 +160,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       },
                     ),
             ),
-
             _MessageInputBar(
               controller: _messageController,
               onSend: _sendMessage,
@@ -215,8 +214,8 @@ class _EmptyChatView extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Connection বাটন থেকে কাছাকাছি\n'
-              'ডিভাইসের সাথে সংযোগ করুন।',
+              'উপরের Connection বাটন থেকে\n'
+              'কাছাকাছি ফোনের সাথে সংযোগ করুন।',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 15,
@@ -251,8 +250,7 @@ class _MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme =
-        Theme.of(context);
+    final theme = Theme.of(context);
 
     return Align(
       alignment: message.isMine
@@ -261,8 +259,7 @@ class _MessageBubble extends StatelessWidget {
       child: Container(
         constraints: BoxConstraints(
           maxWidth:
-              MediaQuery.of(context).size.width *
-                  0.78,
+              MediaQuery.of(context).size.width * 0.78,
         ),
         margin: const EdgeInsets.only(
           bottom: 10,
@@ -274,28 +271,22 @@ class _MessageBubble extends StatelessWidget {
         decoration: BoxDecoration(
           color: message.isMine
               ? theme.colorScheme.primary
-              : theme.colorScheme
-                  .surfaceContainerHighest,
+              : theme.colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.only(
-            topLeft:
-                const Radius.circular(16),
-            topRight:
-                const Radius.circular(16),
-            bottomLeft:
-                Radius.circular(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(
               message.isMine ? 16 : 4,
             ),
-            bottomRight:
-                Radius.circular(
+            bottomRight: Radius.circular(
               message.isMine ? 4 : 16,
             ),
           ),
         ),
         child: Column(
-          crossAxisAlignment:
-              message.isMine
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
+          crossAxisAlignment: message.isMine
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             Text(
               message.text,
@@ -303,25 +294,20 @@ class _MessageBubble extends StatelessWidget {
                 fontSize: 16,
                 height: 1.4,
                 color: message.isMine
-                    ? theme.colorScheme
-                        .onPrimary
-                    : theme.colorScheme
-                        .onSurface,
+                    ? theme.colorScheme.onPrimary
+                    : theme.colorScheme.onSurface,
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              '${message.isMine ? 'আমার ID' : 'Phone ID'}: $deviceId  •  ${_formatTime(message.time)}',
+              '${message.isMine ? 'আমার ID' : 'Phone ID'}: '
+              '$deviceId  •  ${_formatTime(message.time)}',
               style: TextStyle(
                 fontSize: 10,
                 color: message.isMine
-                    ? theme.colorScheme
-                        .onPrimary
-                        .withValues(
-                          alpha: 0.75,
-                        )
-                    : theme.colorScheme
-                        .onSurfaceVariant,
+                    ? theme.colorScheme.onPrimary
+                        .withValues(alpha: 0.75)
+                    : theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ],
@@ -350,19 +336,15 @@ class _MessageInputBar extends StatelessWidget {
         10,
       ),
       decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surface,
+        color: Theme.of(context).colorScheme.surface,
         border: Border(
           top: BorderSide(
-            color: Theme.of(context)
-                .dividerColor,
+            color: Theme.of(context).dividerColor,
           ),
         ),
       ),
       child: Row(
-        crossAxisAlignment:
-            CrossAxisAlignment.end,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Expanded(
             child: TextField(
@@ -371,16 +353,11 @@ class _MessageInputBar extends StatelessWidget {
               maxLines: 5,
               textInputAction:
                   TextInputAction.newline,
-              decoration:
-                  InputDecoration(
-                hintText:
-                    'মেসেজ লিখুন...',
-                border:
-                    OutlineInputBorder(
+              decoration: InputDecoration(
+                hintText: 'মেসেজ লিখুন...',
+                border: OutlineInputBorder(
                   borderRadius:
-                      BorderRadius.circular(
-                    24,
-                  ),
+                      BorderRadius.circular(24),
                 ),
                 contentPadding:
                     const EdgeInsets.symmetric(
@@ -396,9 +373,7 @@ class _MessageInputBar extends StatelessWidget {
           const SizedBox(width: 8),
           IconButton.filled(
             onPressed: onSend,
-            icon: const Icon(
-              Icons.send,
-            ),
+            icon: const Icon(Icons.send),
             iconSize: 22,
           ),
         ],
