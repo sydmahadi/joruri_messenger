@@ -19,8 +19,11 @@ jobs:
         with:
           channel: stable
 
-      - name: Create Flutter project structure
-        run: flutter create . --platforms=android
+      - name: Create Android project if missing
+        run: |
+          if [ ! -f android/app/src/main/AndroidManifest.xml ]; then
+            flutter create . --platforms=android
+          fi
 
       - name: Get dependencies
         run: flutter pub get
