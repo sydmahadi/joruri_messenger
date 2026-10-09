@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
@@ -180,6 +181,7 @@ class MainActivity : FlutterActivity() {
             service.addCharacteristic(characteristic)
 
             val added = server.addService(service)
+
             if (!added) {
                 methodChannel.invokeMethod(
                     "bluetoothError",
@@ -225,8 +227,12 @@ class MainActivity : FlutterActivity() {
             bluetoothLeAdvertiser = advertiser
 
             val settings = AdvertiseSettings.Builder()
-                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                .setAdvertiseMode(
+                    AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
+                )
+                .setTxPowerLevel(
+                    AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
+                )
                 .setConnectable(true)
                 .setTimeout(0)
                 .build()
@@ -236,7 +242,11 @@ class MainActivity : FlutterActivity() {
                 .addServiceUuid(android.os.ParcelUuid(SERVICE_UUID))
                 .build()
 
-            advertiser.startAdvertising(settings, data, advertiseCallback)
+            advertiser.startAdvertising(
+                settings,
+                data,
+                advertiseCallback
+            )
         } catch (e: SecurityException) {
             methodChannel.invokeMethod(
                 "bluetoothError",
@@ -251,6 +261,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
+
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             runOnUiThread {
                 methodChannel.invokeMethod("advertisingStarted", null)
@@ -382,7 +393,10 @@ class MainActivity : FlutterActivity() {
                 val message = value?.toString(Charsets.UTF_8) ?: ""
 
                 runOnUiThread {
-                    methodChannel.invokeMethod("messageReceived", message)
+                    methodChannel.invokeMethod(
+                        "messageReceived",
+                        message
+                    )
                 }
 
                 if (responseNeeded) {
@@ -424,16 +438,17 @@ class MainActivity : FlutterActivity() {
         }
 
         try {
-            characteristic.value = message.toByteArray(Charsets.UTF_8)
+            val payload = message.toByteArray(Charsets.UTF_8)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val status = server.notifyCharacteristicChanged(
                     device,
                     characteristic,
-                    false
+                    false,
+                    payload
                 )
 
-                if (status == BluetoothGatt.GATT_SUCCESS) {
+                if (status == BluetoothStatusCodes.SUCCESS) {
                     methodChannel.invokeMethod("messageSent", message)
                 } else {
                     methodChannel.invokeMethod(
@@ -442,6 +457,8 @@ class MainActivity : FlutterActivity() {
                     )
                 }
             } else {
+                characteristic.value = payload
+
                 @Suppress("DEPRECATION")
                 val success = server.notifyCharacteristicChanged(
                     device,
@@ -473,7 +490,8 @@ class MainActivity : FlutterActivity() {
 
     private fun stopBluetoothServer() {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                 !hasBluetoothPermission()
             ) {
                 return
