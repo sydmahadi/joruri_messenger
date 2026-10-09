@@ -2,7 +2,6 @@
 package com.joruri.joruri_messenger
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
@@ -30,13 +29,13 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "joruri_messenger/bluetooth"
 
-        private val SERVICE_UUID: UUID =
+        private val SERVICE_UUID =
             UUID.fromString("0000FEE0-0000-1000-8000-00805F9B34FB")
 
-        private val CHARACTERISTIC_UUID: UUID =
+        private val CHARACTERISTIC_UUID =
             UUID.fromString("0000FEE1-0000-1000-8000-00805F9B34FB")
 
-        private val DESCRIPTOR_UUID: UUID =
+        private val DESCRIPTOR_UUID =
             UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
     }
 
@@ -180,9 +179,7 @@ class MainActivity : FlutterActivity() {
 
             service.addCharacteristic(characteristic)
 
-            val added = server.addService(service)
-
-            if (!added) {
+            if (!server.addService(service)) {
                 methodChannel.invokeMethod(
                     "bluetoothError",
                     "Could not add Bluetooth service"
@@ -289,7 +286,10 @@ class MainActivity : FlutterActivity() {
 
             if (device == null) return
 
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
+            if (
+                status == BluetoothGatt.GATT_SUCCESS &&
+                newState == BluetoothProfile.STATE_CONNECTED
+            ) {
                 connectedDevice = device
 
                 runOnUiThread {
@@ -393,10 +393,7 @@ class MainActivity : FlutterActivity() {
                 val message = value?.toString(Charsets.UTF_8) ?: ""
 
                 runOnUiThread {
-                    methodChannel.invokeMethod(
-                        "messageReceived",
-                        message
-                    )
+                    methodChannel.invokeMethod("messageReceived", message)
                 }
 
                 if (responseNeeded) {
@@ -441,6 +438,7 @@ class MainActivity : FlutterActivity() {
             val payload = message.toByteArray(Charsets.UTF_8)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // Android 13+: this overload returns an Int status.
                 val status = server.notifyCharacteristicChanged(
                     device,
                     characteristic,
@@ -457,6 +455,7 @@ class MainActivity : FlutterActivity() {
                     )
                 }
             } else {
+                // Older Android versions: this overload returns Boolean.
                 characteristic.value = payload
 
                 @Suppress("DEPRECATION")
