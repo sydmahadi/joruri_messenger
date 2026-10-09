@@ -1,4 +1,13 @@
+
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
+
+import '../models/message.dart';
+import '../services/bluetooth_service.dart';
+import '../services/device_service.dart';
+import '../services/local_storage_service.dart';
 
 class AnnouncementScreen extends StatefulWidget {
   const AnnouncementScreen({super.key});
@@ -8,12 +17,12 @@ class AnnouncementScreen extends StatefulWidget {
       _AnnouncementScreenState();
 }
 
-class _AnnouncementScreenState
-    extends State<AnnouncementScreen> {
+class _AnnouncementScreenState extends State<AnnouncementScreen> {
   final TextEditingController _controller =
       TextEditingController();
 
   bool _isEmergency = false;
+  bool _isSending = false;
 
   @override
   void dispose() {
@@ -22,6 +31,8 @@ class _AnnouncementScreenState
   }
 
   void _showMessage(String message) {
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -29,7 +40,9 @@ class _AnnouncementScreenState
       );
   }
 
-  void _sendAnnouncement() {
+  Future<void> _sendAnnouncement() async {
+    if (_isSending) return;
+
     final text = _controller.text.trim();
 
     if (text.isEmpty) {
@@ -37,12 +50,66 @@ class _AnnouncementScreenState
       return;
     }
 
-    // এই ধাপে শুধু স্ক্রিন তৈরি হচ্ছে।
-    // Bluetooth relay পরবর্তী ধাপে যুক্ত হবে।
-    _showMessage(
-      'ঘোষণার স্ক্রিন প্রস্তুত। '
-      'বার্তা পাঠানোর ব্যবস্থা এখনো যুক্ত হয়নি।',
+    if (text.length > 1000) {
+      _showMessage('ঘোষণার বার্তা ১০০০ অক্ষরের মধ্যে রাখুন।');
+      return;
+    }
+
+    setState(() {
+      _isSending = true;
+    });
+
+    final message = Message(
+      id: const Uuid().v4(),
+      senderId: DeviceService.deviceId,
+      senderName: 'ঘোষণা • ${DeviceService.deviceName}',
+      text: text,
+      createdAt: DateTime.now(),
+      isEmergency: _isEmergency,
+      isDelivered: false,
     );
+
+    try {
+      // প্রথমে ফোনের লোকাল স্টোরেজে ঘোষণা সংরক্ষণ।
+      await LocalStorageService.saveMessage(message);
+
+      // বিদ্যমান Bluetooth সংযোগ দিয়ে পাঠানোর চেষ্টা।
+      await BluetoothService().sendMessage(
+        jsonEncode(message.toMap()),
+      );
+
+      // পাঠানোর চেষ্টা সফল হলে delivered হিসেবে সংরক্ষণ।
+      final deliveredMessage = Message(
+        id: message.id,
+        senderId: message.senderId,
+        senderName: message.senderName,
+        text: message.text,
+        createdAt: message.createdAt,
+        isEmergency: message.isEmergency,
+        isDelivered: true,
+      );
+
+      await LocalStorageService.saveMessage(deliveredMessage);
+
+      _controller.clear();
+
+      _showMessage(
+        'ঘোষণা Bluetooth সংযোগে পাঠানো হয়েছে।',
+      );
+    } catch (e) {
+      // পাঠানো ব্যর্থ হলেও ঘোষণাটি ফোনে সংরক্ষিত থাকবে।
+      _showMessage(
+        'ঘোষণা ফোনে সংরক্ষিত হয়েছে, '
+        'কিন্তু Bluetooth-এ পাঠানো যায়নি। '
+        'সংযোগ পরীক্ষা করুন।',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
   }
 
   @override
@@ -88,10 +155,10 @@ class _AnnouncementScreenState
               minLines: 5,
               maxLines: 9,
               maxLength: 1000,
+              enabled: !_isSending,
               decoration: const InputDecoration(
                 labelText: 'ঘোষণার বার্তা',
-                hintText:
-                    'যেমন: এলাকায় জরুরি সহায়তা প্রয়োজন...',
+                hintText: 'যেমন: এলাকায় জরুরি সহায়তা প্রয়োজন...',
                 alignLabelWithHint: true,
                 border: OutlineInputBorder(),
               ),
@@ -100,11 +167,13 @@ class _AnnouncementScreenState
             Card(
               child: SwitchListTile(
                 value: _isEmergency,
-                onChanged: (value) {
-                  setState(() {
-                    _isEmergency = value;
-                  });
-                },
+                onChanged: _isSending
+                    ? null
+                    : (value) {
+                        setState(() {
+                          _isEmergency = value;
+                        });
+                      },
                 secondary: Icon(
                   Icons.warning_amber_rounded,
                   color: _isEmergency
@@ -121,24 +190,35 @@ class _AnnouncementScreenState
             SizedBox(
               height: 52,
               child: FilledButton.icon(
-                onPressed: _sendAnnouncement,
-                icon: const Icon(Icons.campaign),
-                label: const Text(
-                  'ঘোষণা পাঠান',
-                  style: TextStyle(fontSize: 16),
+                onPressed:
+                    _isSending ? null : _sendAnnouncement,
+                icon: _isSending
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(Icons.campaign),
+                label: Text(
+                  _isSending
+                      ? 'পাঠানো হচ্ছে...'
+                      : 'ঘোষণা পাঠান',
+                  style: const TextStyle(fontSize: 16),
                 ),
               ),
             ),
             const SizedBox(height: 18),
-            const Card(
+            Card(
               child: Padding(
-                padding: EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
                 child: Text(
-                  'নোট: এই ধাপে ঘোষণা লেখার স্ক্রিন তৈরি হচ্ছে। '
-                  'এখনো বার্তাটি অন্য ফোনে পাঠানো বা রিলে করা '
-                  'হয় না। পরবর্তী ধাপে Bluetooth ও সংরক্ষণ '
-                  'ব্যবস্থার সঙ্গে যুক্ত করা হবে।',
-                  style: TextStyle(height: 1.5),
+                  'ঘোষণা প্রথমে এই ফোনে সংরক্ষণ করা হবে। '
+                  'এরপর বিদ্যমান Bluetooth সংযোগ দিয়ে '
+                  'পাঠানোর চেষ্টা করা হবে। অন্য ফোনে পৌঁছানো '
+                  'এবং স্বয়ংক্রিয় রিলে এখনো নিশ্চিত নয়।',
+                  style: const TextStyle(height: 1.5),
                 ),
               ),
             ),
