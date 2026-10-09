@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 import 'screens/connection_screen.dart';
+import 'models/message.dart';
 import 'services/device_service.dart';
 import 'services/local_storage_service.dart';
 
@@ -45,7 +49,31 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController =
       ScrollController();
 
-  final List<ChatMessage> _messages = [];
+  final List<Message> _messages = [];
+
+  bool _isLoading = true;
+  bool _isSending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMessages();
+  }
+
+  Future<void> _loadMessages() async {
+    final savedMessages = LocalStorageService.getMessages();
+
+    if (!mounted) return;
+
+    setState(() {
+      _messages
+        ..clear()
+        ..addAll(savedMessages);
+      _isLoading = false;
+    });
+
+    _scrollToBottom();
+  }
 
   @override
   void dispose() {
@@ -54,37 +82,56 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  void _sendMessage() {
+  Future<void> _sendMessage() async {
+    if (_isSending) return;
+
     final text = _messageController.text.trim();
 
-    if (text.isEmpty) {
-      return;
-    }
+    if (text.isEmpty) return;
 
     setState(() {
-      _messages.add(
-        ChatMessage(
-          text: text,
-          senderId: DeviceService.deviceId,
-          isMine: true,
-          time: DateTime.now(),
-        ),
-      );
+      _isSending = true;
     });
 
-    _messageController.clear();
+    final message = Message(
+      id: const Uuid().v4(),
+      senderId: DeviceService.deviceId,
+      senderName: DeviceService.deviceName,
+      text: text,
+      createdAt: DateTime.now(),
+    );
 
-    _scrollToBottom();
+    try {
+      await LocalStorageService.saveMessage(message);
 
-    // Bluetooth / Wi-Fi / Hotspot message sending
-    // পরের ধাপে এখানে যুক্ত করা হবে।
+      if (!mounted) return;
+
+      setState(() {
+        _messages.add(message);
+      });
+
+      _messageController.clear();
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('মেসেজ সেভ করা যায়নি: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
   }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) {
-        return;
-      }
+      if (!_scrollController.hasClients) return;
 
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
@@ -95,10 +142,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _shortDeviceId(String id) {
-    if (id.length <= 8) {
-      return id;
-    }
-
+    if (id.length <= 8) return id;
     return id.substring(0, 8);
   }
 
@@ -117,18 +161,13 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text(
           'জরুরি মেসেঞ্জার',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold),
         ),
-        centerTitle: false,
         actions: [
           IconButton(
             tooltip: 'Connection',
             onPressed: _openConnectionScreen,
-            icon: const Icon(
-              Icons.link,
-            ),
+            icon: const Icon(Icons.link),
           ),
         ],
       ),
@@ -136,32 +175,37 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           children: [
             Expanded(
-              child: _messages.isEmpty
-                  ? const _EmptyChatView()
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.fromLTRB(
-                        12,
-                        16,
-                        12,
-                        16,
-                      ),
-                      itemCount: _messages.length,
-                      itemBuilder: (context, index) {
-                        final message =
-                            _messages[index];
-
-                        return _MessageBubble(
-                          message: message,
-                          deviceId: _shortDeviceId(
-                            message.senderId,
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(),
+                    )
+                  : _messages.isEmpty
+                      ? const _EmptyChatView()
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.fromLTRB(
+                            12, 16, 12, 16,
                           ),
-                        );
-                      },
-                    ),
+                          itemCount: _messages.length,
+                          itemBuilder: (context, index) {
+                            final message = _messages[index];
+                            final isMine =
+                                message.senderId ==
+                                DeviceService.deviceId;
+
+                            return _MessageBubble(
+                              message: message,
+                              deviceId: _shortDeviceId(
+                                message.senderId,
+                              ),
+                              isMine: isMine,
+                            );
+                          },
+                        ),
             ),
             _MessageInputBar(
               controller: _messageController,
+              isSending: _isSending,
               onSend: _sendMessage,
             ),
           ],
@@ -169,20 +213,6 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
-}
-
-class ChatMessage {
-  final String text;
-  final String senderId;
-  final bool isMine;
-  final DateTime time;
-
-  const ChatMessage({
-    required this.text,
-    required this.senderId,
-    required this.isMine,
-    required this.time,
-  });
 }
 
 class _EmptyChatView extends StatelessWidget {
@@ -194,15 +224,12 @@ class _EmptyChatView extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(30),
         child: Column(
-          mainAxisAlignment:
-              MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
               Icons.forum_outlined,
               size: 72,
-              color: Theme.of(context)
-                  .colorScheme
-                  .primary,
+              color: Theme.of(context).colorScheme.primary,
             ),
             const SizedBox(height: 18),
             const Text(
@@ -230,21 +257,19 @@ class _EmptyChatView extends StatelessWidget {
 }
 
 class _MessageBubble extends StatelessWidget {
-  final ChatMessage message;
+  final Message message;
   final String deviceId;
+  final bool isMine;
 
   const _MessageBubble({
     required this.message,
     required this.deviceId,
+    required this.isMine,
   });
 
   String _formatTime(DateTime time) {
-    final hour =
-        time.hour.toString().padLeft(2, '0');
-
-    final minute =
-        time.minute.toString().padLeft(2, '0');
-
+    final hour = time.hour.toString().padLeft(2, '0');
+    final minute = time.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
 
@@ -253,38 +278,30 @@ class _MessageBubble extends StatelessWidget {
     final theme = Theme.of(context);
 
     return Align(
-      alignment: message.isMine
-          ? Alignment.centerRight
-          : Alignment.centerLeft,
+      alignment:
+          isMine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         constraints: BoxConstraints(
-          maxWidth:
-              MediaQuery.of(context).size.width * 0.78,
+          maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
-        margin: const EdgeInsets.only(
-          bottom: 10,
-        ),
+        margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(
           horizontal: 14,
           vertical: 10,
         ),
         decoration: BoxDecoration(
-          color: message.isMine
+          color: isMine
               ? theme.colorScheme.primary
               : theme.colorScheme.surfaceContainerHighest,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),
             topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(
-              message.isMine ? 16 : 4,
-            ),
-            bottomRight: Radius.circular(
-              message.isMine ? 4 : 16,
-            ),
+            bottomLeft: Radius.circular(isMine ? 16 : 4),
+            bottomRight: Radius.circular(isMine ? 4 : 16),
           ),
         ),
         child: Column(
-          crossAxisAlignment: message.isMine
+          crossAxisAlignment: isMine
               ? CrossAxisAlignment.end
               : CrossAxisAlignment.start,
           children: [
@@ -293,18 +310,18 @@ class _MessageBubble extends StatelessWidget {
               style: TextStyle(
                 fontSize: 16,
                 height: 1.4,
-                color: message.isMine
+                color: isMine
                     ? theme.colorScheme.onPrimary
                     : theme.colorScheme.onSurface,
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              '${message.isMine ? 'আমার ID' : 'Phone ID'}: '
-              '$deviceId  •  ${_formatTime(message.time)}',
+              '${isMine ? 'আমার ID' : message.senderName}: '
+              '$deviceId • ${_formatTime(message.createdAt)}',
               style: TextStyle(
                 fontSize: 10,
-                color: message.isMine
+                color: isMine
                     ? theme.colorScheme.onPrimary
                         .withValues(alpha: 0.75)
                     : theme.colorScheme.onSurfaceVariant,
@@ -319,22 +336,19 @@ class _MessageBubble extends StatelessWidget {
 
 class _MessageInputBar extends StatelessWidget {
   final TextEditingController controller;
+  final bool isSending;
   final VoidCallback onSend;
 
   const _MessageInputBar({
     required this.controller,
+    required this.isSending,
     required this.onSend,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.fromLTRB(
-        10,
-        8,
-        10,
-        10,
-      ),
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border(
@@ -351,29 +365,32 @@ class _MessageInputBar extends StatelessWidget {
               controller: controller,
               minLines: 1,
               maxLines: 5,
-              textInputAction:
-                  TextInputAction.newline,
+              textInputAction: TextInputAction.newline,
               decoration: InputDecoration(
                 hintText: 'মেসেজ লিখুন...',
                 border: OutlineInputBorder(
-                  borderRadius:
-                      BorderRadius.circular(24),
+                  borderRadius: BorderRadius.circular(24),
                 ),
-                contentPadding:
-                    const EdgeInsets.symmetric(
+                contentPadding: const EdgeInsets.symmetric(
                   horizontal: 18,
                   vertical: 12,
                 ),
               ),
-              onSubmitted: (_) {
-                onSend();
-              },
+              onSubmitted: (_) => onSend(),
             ),
           ),
           const SizedBox(width: 8),
           IconButton.filled(
-            onPressed: onSend,
-            icon: const Icon(Icons.send),
+            onPressed: isSending ? null : onSend,
+            icon: isSending
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                    ),
+                  )
+                : const Icon(Icons.send),
             iconSize: 22,
           ),
         ],
