@@ -14,6 +14,10 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
+  void _openChat(BuildContext context) {
+    Navigator.pushNamed(context, '/chat');
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
@@ -93,6 +97,19 @@ class HomeScreen extends StatelessWidget {
                 context,
                 const PrivateMessageScreen(),
               ),
+            ),
+
+            const SizedBox(height: 16),
+
+            _FeatureCard(
+              icon: Icons.chat_rounded,
+              title: 'বর্তমান চ্যাট',
+              description:
+                  'আগের Bluetooth চ্যাট ও সংরক্ষিত মেসেজ খুলুন।',
+              buttonText: 'চ্যাট খুলুন',
+              color: colors.surfaceContainerHighest,
+              iconColor: colors.onSurface,
+              onTap: () => _openChat(context),
             ),
 
             const SizedBox(height: 24),
