@@ -1,4 +1,13 @@
+
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
+
+import '../models/message.dart';
+import '../services/bluetooth_service.dart';
+import '../services/device_service.dart';
+import '../services/local_storage_service.dart';
 
 class PrivateMessageScreen extends StatefulWidget {
   const PrivateMessageScreen({super.key});
@@ -16,6 +25,8 @@ class _PrivateMessageScreenState
   final TextEditingController _messageController =
       TextEditingController();
 
+  bool _isSending = false;
+
   @override
   void dispose() {
     _recipientController.dispose();
@@ -24,33 +35,81 @@ class _PrivateMessageScreenState
   }
 
   void _showMessage(String message) {
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _sendPrivateMessage() {
+  Future<void> _sendPrivateMessage() async {
+    if (_isSending) return;
+
     final recipientId = _recipientController.text.trim();
-    final message = _messageController.text.trim();
+    final text = _messageController.text.trim();
 
     if (recipientId.isEmpty) {
       _showMessage('প্রাপকের ডিভাইস ID লিখুন।');
       return;
     }
 
-    if (message.isEmpty) {
+    if (recipientId == DeviceService.deviceId) {
+      _showMessage('নিজের ডিভাইসে মেসেজ পাঠানো যাবে না।');
+      return;
+    }
+
+    if (text.isEmpty) {
       _showMessage('মেসেজ লিখুন।');
       return;
     }
 
-    // এই ধাপে শুধু স্ক্রিন তৈরি হচ্ছে।
-    // Encryption ও Bluetooth delivery পরে যুক্ত হবে।
-    _showMessage(
-      'ব্যক্তিগত মেসেজের স্ক্রিন প্রস্তুত। '
-      'এখনো এনক্রিপশন বা মেসেজ পাঠানোর ব্যবস্থা যুক্ত হয়নি।',
+    setState(() {
+      _isSending = true;
+    });
+
+    final message = Message(
+      id: const Uuid().v4(),
+      senderId: DeviceService.deviceId,
+      senderName: DeviceService.deviceName,
+      text: text,
+      createdAt: DateTime.now(),
+      isEmergency: false,
+      isDelivered: false,
     );
+
+    try {
+      // প্রথমে মেসেজটি এই ফোনে সংরক্ষণ।
+      await LocalStorageService.saveMessage(message);
+
+      // বর্তমান Bluetooth ব্যবস্থায় প্রাপকের ID
+      // দিয়ে নির্দিষ্ট ফোন নির্বাচন করা হয় না।
+      // তাই এটি শুধু বিদ্যমান সংযোগে পাঠানোর চেষ্টা।
+      await BluetoothService().sendMessage(
+        jsonEncode({
+          ...message.toMap(),
+          'messageType': 'private',
+          'recipientId': recipientId,
+        }),
+      );
+
+      _messageController.clear();
+
+      _showMessage(
+        'Bluetooth-এ পাঠানোর চেষ্টা সম্পন্ন। '
+        'প্রাপক পেয়েছেন কি না নিশ্চিত নয়।',
+      );
+    } catch (_) {
+      _showMessage(
+        'মেসেজ ফোনে সংরক্ষিত আছে, কিন্তু Bluetooth-এ '
+        'পাঠানো যায়নি। সংযোগ পরীক্ষা করুন।',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSending = false;
+        });
+      }
+    }
   }
 
   @override
@@ -93,6 +152,7 @@ class _PrivateMessageScreenState
             const SizedBox(height: 28),
             TextField(
               controller: _recipientController,
+              enabled: !_isSending,
               decoration: const InputDecoration(
                 labelText: 'প্রাপকের ডিভাইস ID',
                 hintText: 'প্রাপকের সম্পূর্ণ ID',
@@ -103,6 +163,7 @@ class _PrivateMessageScreenState
             const SizedBox(height: 18),
             TextField(
               controller: _messageController,
+              enabled: !_isSending,
               minLines: 4,
               maxLines: 8,
               maxLength: 1000,
@@ -118,11 +179,22 @@ class _PrivateMessageScreenState
             SizedBox(
               height: 52,
               child: FilledButton.icon(
-                onPressed: _sendPrivateMessage,
-                icon: const Icon(Icons.lock),
-                label: const Text(
-                  'ব্যক্তিগত মেসেজ পাঠান',
-                  style: TextStyle(fontSize: 16),
+                onPressed:
+                    _isSending ? null : _sendPrivateMessage,
+                icon: _isSending
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(Icons.send_rounded),
+                label: Text(
+                  _isSending
+                      ? 'পাঠানো হচ্ছে...'
+                      : 'ব্যক্তিগত মেসেজ পাঠান',
+                  style: const TextStyle(fontSize: 16),
                 ),
               ),
             ),
@@ -131,10 +203,10 @@ class _PrivateMessageScreenState
               child: Padding(
                 padding: EdgeInsets.all(16),
                 child: Text(
-                  'গুরুত্বপূর্ণ: এই স্ক্রিনটি এখনো পরীক্ষামূলক। '
-                  'মেসেজ পাঠানো, প্রাপকের পরিচয় যাচাই এবং '
-                  'এনক্রিপশন যুক্ত না হওয়া পর্যন্ত এখানে '
-                  'সংবেদনশীল তথ্য পাঠাবেন না।',
+                  'সতর্কতা: মেসেজ এখনো এনক্রিপ্ট করা হয় না। '
+                  'প্রাপকের ID যাচাই ও নির্দিষ্ট প্রাপকের কাছে '
+                  'পৌঁছানোর ব্যবস্থাও সম্পূর্ণ নয়। সংবেদনশীল '
+                  'তথ্য পাঠাবেন না।',
                   style: TextStyle(height: 1.5),
                 ),
               ),
