@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
-import 'screens/connection_screen.dart';
 import 'models/message.dart';
+import 'screens/connection_screen.dart';
+import 'services/bluetooth_service.dart';
 import 'services/device_service.dart';
 import 'services/local_storage_service.dart';
 
@@ -49,7 +51,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController =
       ScrollController();
 
+  final BluetoothService _bluetoothService = BluetoothService();
+
   final List<Message> _messages = [];
+
+  StreamSubscription<String>? _messageSubscription;
 
   bool _isLoading = true;
   bool _isSending = false;
@@ -57,7 +63,9 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+
     _loadMessages();
+    _listenForBluetoothMessages();
   }
 
   Future<void> _loadMessages() async {
@@ -75,10 +83,103 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  void _listenForBluetoothMessages() {
+    _messageSubscription =
+        _bluetoothService.messageStream.listen(
+      (rawMessage) {
+        _receiveBluetoothMessage(rawMessage);
+      },
+      onError: (Object error) {
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Bluetooth মেসেজ গ্রহণে সমস্যা: $error'),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _receiveBluetoothMessage(String rawMessage) async {
+    final text = rawMessage.trim();
+    if (text.isEmpty) return;
+
+    Message? receivedMessage;
+
+    // নতুন ফরম্যাট: সম্পূর্ণ Message JSON আকারে গ্রহণ।
+    try {
+      final decoded = jsonDecode(text);
+
+      if (decoded is Map) {
+        final map = Map<String, dynamic>.from(decoded);
+
+        if (map.containsKey('id') &&
+            map.containsKey('senderId') &&
+            map.containsKey('text') &&
+            map.containsKey('createdAt')) {
+          receivedMessage = Message.fromMap(map);
+        }
+      }
+    } catch (_) {
+      // সাধারণ টেক্সট হলে নিচের অংশে গ্রহণ করা হবে।
+    }
+
+    // পুরোনো সংস্করণ থেকে সাধারণ টেক্সট এলে সেটিও দেখানো।
+    receivedMessage ??= Message(
+      id: const Uuid().v4(),
+      senderId: 'bluetooth-peer',
+      senderName: 'Bluetooth ফোন',
+      text: text,
+      createdAt: DateTime.now(),
+    );
+
+    // একই ID-এর মেসেজ পুনরায় এলে বাদ দেওয়া।
+    final alreadyExists = _messages.any(
+      (message) => message.id == receivedMessage!.id,
+    );
+
+    if (alreadyExists) return;
+
+    // নিজের পাঠানো মেসেজ আবার ফিরে এলে দ্বিতীয়বার দেখাবে না।
+    if (receivedMessage.senderId == DeviceService.deviceId) {
+      return;
+    }
+
+    try {
+      await LocalStorageService.saveMessage(receivedMessage);
+
+      if (!mounted) return;
+
+      setState(() {
+        _messages.add(receivedMessage!);
+        _messages.sort(
+          (a, b) => a.createdAt.compareTo(b.createdAt),
+        );
+      });
+
+      _scrollToBottom();
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('আসা মেসেজ সেভ করা যায়নি: $error'),
+        ),
+      );
+    }
+  }
+
   @override
   void dispose() {
+    _messageSubscription?.cancel();
+
     _messageController.dispose();
     _scrollController.dispose();
+
+    // BluetoothService একটি singleton।
+    // এখানে এর dispose() কল করা যাবে না।
+
     super.dispose();
   }
 
@@ -86,7 +187,6 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isSending) return;
 
     final text = _messageController.text.trim();
-
     if (text.isEmpty) return;
 
     setState(() {
@@ -102,6 +202,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     try {
+      // প্রথমে ফোনে মেসেজ সেভ হবে।
       await LocalStorageService.saveMessage(message);
 
       if (!mounted) return;
@@ -112,6 +213,32 @@ class _ChatScreenState extends State<ChatScreen> {
 
       _messageController.clear();
       _scrollToBottom();
+
+      // এরপর Bluetooth দিয়ে অন্য ফোনে পাঠানোর চেষ্টা।
+      try {
+        await _bluetoothService.sendMessage(
+          jsonEncode(message.toMap()),
+        );
+      } catch (error) {
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'মেসেজ ফোনে সেভ হয়েছে, কিন্তু Bluetooth-এ পাঠানো যায়নি। '
+              'সংযোগ পরীক্ষা করুন।',
+            ),
+            action: SnackBarAction(
+              label: 'বিস্তারিত',
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('$error')),
+                );
+              },
+            ),
+          ),
+        );
+      }
     } catch (error) {
       if (!mounted) return;
 
@@ -184,11 +311,15 @@ class _ChatScreenState extends State<ChatScreen> {
                       : ListView.builder(
                           controller: _scrollController,
                           padding: const EdgeInsets.fromLTRB(
-                            12, 16, 12, 16,
+                            12,
+                            16,
+                            12,
+                            16,
                           ),
                           itemCount: _messages.length,
                           itemBuilder: (context, index) {
                             final message = _messages[index];
+
                             final isMine =
                                 message.senderId ==
                                 DeviceService.deviceId;
@@ -317,7 +448,7 @@ class _MessageBubble extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '${isMine ? 'আমার ID' : message.senderName}: '
+              '${isMine ? 'আমি' : message.senderName}: '
               '$deviceId • ${_formatTime(message.createdAt)}',
               style: TextStyle(
                 fontSize: 10,
