@@ -1,4 +1,3 @@
-
 import 'dart:async';
 import 'dart:convert';
 
@@ -54,29 +53,32 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController =
       TextEditingController();
 
-  final ScrollController _scrollController =
-      ScrollController();
+  final ScrollController _scrollController = ScrollController();
 
   final BluetoothService _bluetoothService = BluetoothService();
 
   final List<Message> _messages = [];
 
   StreamSubscription<String>? _messageSubscription;
+  StreamSubscription<String>? _connectionSubscription;
 
   bool _isLoading = true;
   bool _isSending = false;
+  bool _showingConnectionRequest = false;
+  bool _connectionApproved = false;
 
   @override
   void initState() {
     super.initState();
+
     _loadMessages();
     _listenForBluetoothMessages();
+    _listenForConnectionStatus();
   }
 
   Future<void> _loadMessages() async {
     final savedMessages = LocalStorageService.getMessages();
 
-    // শুধু সাধারণ চ্যাটের মেসেজ দেখাবে।
     final chatMessages = savedMessages.where((message) {
       return message.messageType == 'chat' &&
           !message.senderName.startsWith('ঘোষণা • ');
@@ -88,6 +90,7 @@ class _ChatScreenState extends State<ChatScreen> {
       _messages
         ..clear()
         ..addAll(chatMessages);
+
       _isLoading = false;
     });
 
@@ -109,9 +112,67 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _listenForConnectionStatus() {
+    _connectionSubscription =
+        _bluetoothService.connectionStream.listen((event) {
+      if (!mounted) return;
+
+      if (event == 'connection_accepted') {
+        setState(() {
+          _connectionApproved = true;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('সংযোগের অনুরোধ গ্রহণ করা হয়েছে।'),
+          ),
+        );
+      } else if (event == 'connection_rejected' ||
+          event == 'disconnected' ||
+          event == 'server_disconnected') {
+        setState(() {
+          _connectionApproved = false;
+        });
+      }
+    });
+  }
+
   Future<void> _receiveBluetoothMessage(String rawMessage) async {
     final text = rawMessage.trim();
+
     if (text.isEmpty) return;
+
+    // সংযোগের অনুরোধ গ্রহণ বা প্রত্যাখ্যানের ব্যবস্থা।
+    try {
+      final decoded = jsonDecode(text);
+
+      if (decoded is Map) {
+        final data = Map<String, dynamic>.from(decoded);
+
+        if (data['type'] == 'connection_request') {
+          final requesterId = data['senderId']?.toString() ?? '';
+          final requesterName =
+              data['senderName']?.toString() ?? 'অজানা ফোন';
+
+          if (requesterId.isNotEmpty) {
+            await _showConnectionRequestDialog(
+              requesterId: requesterId,
+              requesterName: requesterName,
+            );
+          }
+
+          return;
+        }
+
+        // Connection protocol message যেন সাধারণ চ্যাটে না আসে।
+        if (data['type'] == 'connection_accepted' ||
+            data['type'] == 'connection_rejected') {
+          return;
+        }
+      }
+    } catch (_) {
+      // নিচে সাধারণ মেসেজের নিয়ম চলবে।
+    }
 
     Message? receivedMessage;
     bool isStructuredMessage = false;
@@ -127,7 +188,12 @@ class _ChatScreenState extends State<ChatScreen> {
             map.containsKey('text') &&
             map.containsKey('createdAt')) {
           isStructuredMessage = true;
-          receivedMessage = Message.fromMap(map);
+
+          try {
+            receivedMessage = Message.fromMap(map);
+          } catch (_) {
+            return;
+          }
         }
       }
     } catch (_) {
@@ -153,12 +219,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final message = receivedMessage;
 
-    // নিজের পাঠানো মেসেজ আবার গ্রহণ করলে উপেক্ষা করবে।
     if (message.senderId == DeviceService.deviceId) {
       return;
     }
 
-    // ব্যক্তিগত মেসেজে প্রাপকের ID যাচাই।
     if (message.messageType == 'private') {
       if (message.recipientId == null ||
           message.recipientId != DeviceService.deviceId) {
@@ -166,8 +230,8 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
 
-    // একই মেসেজ দ্বিতীয়বার সংরক্ষণ করবে না।
     final savedMessages = LocalStorageService.getMessages();
+
     final alreadyExists = savedMessages.any(
       (saved) => saved.id == message.id,
     );
@@ -179,7 +243,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (!mounted) return;
 
-      // ঘোষণা ও ব্যক্তিগত মেসেজ সাধারণ চ্যাটে দেখাবে না।
       if (message.messageType != 'chat' ||
           message.senderName.startsWith('ঘোষণা • ')) {
         return;
@@ -187,6 +250,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       setState(() {
         _messages.add(message);
+
         _messages.sort(
           (a, b) => a.createdAt.compareTo(b.createdAt),
         );
@@ -204,14 +268,87 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _showConnectionRequestDialog({
+    required String requesterId,
+    required String requesterName,
+  }) async {
+    if (!mounted || _showingConnectionRequest) return;
+
+    _showingConnectionRequest = true;
+
+    try {
+      final accepted = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('সংযোগের অনুরোধ'),
+            content: Text(
+              '$requesterName আপনার ফোনের সঙ্গে '
+              'সংযুক্ত হতে চায়। আপনি কি অনুমতি দেবেন?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(false);
+                },
+                child: const Text('প্রত্যাখ্যান করুন'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(true);
+                },
+                child: const Text('গ্রহণ করুন'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!mounted || accepted == null) return;
+
+      await _bluetoothService.respondToConnectionRequest(
+        accepted: accepted,
+        requesterId: requesterId,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _connectionApproved = accepted;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            accepted
+                ? 'অনুরোধ গ্রহণ করা হয়েছে।'
+                : 'অনুরোধ প্রত্যাখ্যান করা হয়েছে।',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('অনুরোধের উত্তর পাঠানো যায়নি: $error'),
+        ),
+      );
+    } finally {
+      _showingConnectionRequest = false;
+    }
+  }
+
   @override
   void dispose() {
     _messageSubscription?.cancel();
+    _connectionSubscription?.cancel();
+
     _messageController.dispose();
     _scrollController.dispose();
 
-    // BluetoothService একটি singleton।
-    // এখানে dispose করা যাবে না।
+    // BluetoothService singleton হওয়ায় এখানে dispose করা যাবে না।
     super.dispose();
   }
 
@@ -219,7 +356,19 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isSending) return;
 
     final text = _messageController.text.trim();
+
     if (text.isEmpty) return;
+
+    if (!_bluetoothService.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'আগে অন্য ফোনের সংযোগের অনুরোধ গ্রহণ করাতে হবে।',
+          ),
+        ),
+      );
+      return;
+    }
 
     setState(() {
       _isSending = true;
@@ -315,6 +464,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bluetoothConnected = _bluetoothService.isConnected;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -332,6 +483,21 @@ class _ChatScreenState extends State<ChatScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            if (!bluetoothConnected)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest,
+                child: Text(
+                  _connectionApproved
+                      ? 'সংযোগের অবস্থা যাচাই হচ্ছে...'
+                      : 'চ্যাট করতে আগে অনুমোদিত Bluetooth সংযোগ করুন।',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
             Expanded(
               child: _isLoading
                   ? const Center(
@@ -432,6 +598,7 @@ class _MessageBubble extends StatelessWidget {
   String _formatTime(DateTime time) {
     final hour = time.hour.toString().padLeft(2, '0');
     final minute = time.minute.toString().padLeft(2, '0');
+
     return '$hour:$minute';
   }
 
