@@ -1,7 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart'
+    hide BluetoothService;
 
 import '../services/bluetooth_service.dart';
 
@@ -75,7 +76,6 @@ class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
 
     try {
       await _bluetoothService.startScan();
-
       await Future.delayed(const Duration(seconds: 10));
     } catch (e) {
       if (mounted) {
@@ -93,7 +93,7 @@ class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
   }
 
   Future<void> _connectToDevice(ScanResult result) async {
-    if (_connecting) return;
+    if (_connecting || _connected) return;
 
     setState(() {
       _connecting = true;
@@ -170,7 +170,7 @@ class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Bluetooth চালু করার অনুরোধ পাঠানো হয়েছে। '
+            'Bluetooth বিজ্ঞাপন চালুর অনুরোধ পাঠানো হয়েছে। '
             'অন্য ফোন থেকে স্ক্যান করে দেখুন।',
           ),
         ),
@@ -214,8 +214,8 @@ class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
 
   @override
   void dispose() {
-    // শুধু এই স্ক্রিনের নিজস্ব subscription বন্ধ হবে।
-    // BluetoothService একটি singleton; এখানে dispose করা যাবে না।
+    // শুধু এই স্ক্রিনের subscription বন্ধ হবে।
+    // Singleton BluetoothService এখানে dispose করা যাবে না।
     _devicesSubscription?.cancel();
     _connectionSubscription?.cancel();
 
@@ -257,7 +257,7 @@ class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
                   const SizedBox(height: 10),
                   const Text(
                     'দুটি ফোনেই জরুরি মেসেঞ্জার চালু রাখুন। '
-                    'একটি ফোনে Bluetooth বিজ্ঞাপন চালু করুন, '
+                    'একটি ফোনে Bluetooth বিজ্ঞাপন চালু করুন। '
                     'অন্য ফোনে স্ক্যান করে ডিভাইসটি নির্বাচন করুন।',
                   ),
                   const SizedBox(height: 16),
@@ -397,16 +397,13 @@ class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
             )
           else
             ..._devices.map((result) {
-              final name = _deviceName(result);
-              final address = result.device.remoteId.toString();
-
               return Card(
                 child: ListTile(
                   leading: const CircleAvatar(
                     child: Icon(Icons.phone_android),
                   ),
-                  title: Text(name),
-                  subtitle: Text(address),
+                  title: Text(_deviceName(result)),
+                  subtitle: Text(result.device.remoteId.toString()),
                   trailing: _connecting
                       ? const SizedBox(
                           width: 22,
@@ -424,9 +421,9 @@ class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
             }),
           const SizedBox(height: 20),
           const Text(
-            'মনে রাখবেন: Bluetooth চালু থাকা, প্রয়োজনীয় অনুমতি দেওয়া '
-            'এবং অন্য ফোনে অ্যাপের বিজ্ঞাপন চালু থাকা প্রয়োজন। '
-            'বাস্তব ফোনে পরীক্ষা না করা পর্যন্ত সংযোগ ও বার্তা আদান-প্রদান '
+            'Bluetooth চালু রাখুন এবং প্রয়োজনীয় অনুমতি দিন। '
+            'অন্য ফোনে বিজ্ঞাপন চালু থাকতে হবে। '
+            'দুই ফোনে পরীক্ষা না করা পর্যন্ত বার্তা আদান-প্রদান '
             'সম্পূর্ণ কাজ করছে বলে নিশ্চিত হওয়া যাবে না।',
             style: TextStyle(fontSize: 12),
           ),
