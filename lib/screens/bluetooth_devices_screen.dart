@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-import '../services/bluetooth_service.dart' as local_bluetooth;
+import '../services/bluetooth_service.dart';
 
 class BluetoothDevicesScreen extends StatefulWidget {
   const BluetoothDevicesScreen({super.key});
@@ -13,10 +13,8 @@ class BluetoothDevicesScreen extends StatefulWidget {
       _BluetoothDevicesScreenState();
 }
 
-class _BluetoothDevicesScreenState
-    extends State<BluetoothDevicesScreen> {
-  final local_bluetooth.BluetoothService _bluetoothService =
-      local_bluetooth.BluetoothService();
+class _BluetoothDevicesScreenState extends State<BluetoothDevicesScreen> {
+  final BluetoothService _bluetoothService = BluetoothService();
 
   StreamSubscription<List<ScanResult>>? _devicesSubscription;
   StreamSubscription<String>? _connectionSubscription;
@@ -26,6 +24,7 @@ class _BluetoothDevicesScreenState
   bool _scanning = false;
   bool _connecting = false;
   bool _connected = false;
+  bool _advertising = false;
 
   String? _connectedAddress;
   String? _error;
@@ -36,9 +35,7 @@ class _BluetoothDevicesScreenState
 
     _devicesSubscription =
         _bluetoothService.devicesStream.listen((devices) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         _devices = devices;
@@ -46,51 +43,29 @@ class _BluetoothDevicesScreenState
     });
 
     _connectionSubscription =
-        _bluetoothService.connectionStream.listen((status) {
-      if (!mounted) {
-        return;
-      }
+        _bluetoothService.connectionStream.listen((event) {
+      if (!mounted) return;
 
-      if (status.startsWith('connected:')) {
-        setState(() {
-          _connecting = false;
+      setState(() {
+        if (event.startsWith('connected:')) {
           _connected = true;
-          _connectedAddress =
-              status.substring('connected:'.length);
+          _connecting = false;
+          _connectedAddress = event.substring('connected:'.length);
           _error = null;
-        });
-
-        _showMessage(
-          'ডিভাইসের সাথে সংযোগ হয়েছে',
-        );
-      } else if (status == 'disconnected') {
-        setState(() {
-          _connecting = false;
+        } else if (event == 'disconnected') {
           _connected = false;
-          _connectedAddress = null;
-        });
-      } else if (status.startsWith('error:')) {
-        setState(() {
           _connecting = false;
-          _error = status.substring('error:'.length);
-        });
-      }
+          _connectedAddress = null;
+        } else if (event.startsWith('error:')) {
+          _error = event.substring('error:'.length);
+          _connecting = false;
+        }
+      });
     });
   }
 
-  @override
-  void dispose() {
-    _devicesSubscription?.cancel();
-    _connectionSubscription?.cancel();
-    _bluetoothService.dispose();
-
-    super.dispose();
-  }
-
   Future<void> _scanDevices() async {
-    if (_connecting || _connected) {
-      return;
-    }
+    if (_scanning || _connecting) return;
 
     setState(() {
       _scanning = true;
@@ -101,39 +76,24 @@ class _BluetoothDevicesScreenState
     try {
       await _bluetoothService.startScan();
 
-      await Future<void>.delayed(
-        const Duration(seconds: 10),
-      );
+      await Future.delayed(const Duration(seconds: 10));
     } catch (e) {
-      if (!mounted) {
-        return;
+      if (mounted) {
+        setState(() {
+          _error = 'ডিভাইস খুঁজতে সমস্যা হয়েছে: $e';
+        });
       }
-
-      setState(() {
-        _error = e.toString().replaceFirst(
-              'Exception: ',
-              '',
-            );
-      });
     } finally {
-      if (!mounted) {
-        return;
+      if (mounted) {
+        setState(() {
+          _scanning = false;
+        });
       }
-
-      setState(() {
-        _scanning = false;
-      });
     }
   }
 
-  Future<void> _connectToDevice(
-    ScanResult result,
-  ) async {
-    if (_connecting || _connected) {
-      return;
-    }
-
-    final name = _deviceName(result);
+  Future<void> _connectToDevice(ScanResult result) async {
+    if (_connecting) return;
 
     setState(() {
       _connecting = true;
@@ -141,348 +101,334 @@ class _BluetoothDevicesScreenState
     });
 
     try {
-      await _bluetoothService.connectToDevice(
-        result,
-      );
+      await _bluetoothService.connectToDevice(result);
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         _connected = true;
-        _connectedAddress =
-            result.device.remoteId.str;
+        _connectedAddress = result.device.remoteId.toString();
         _connecting = false;
       });
 
-      _showMessage(
-        '$name-এর সাথে সংযোগ হয়েছে',
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Bluetooth সংযোগ সফল হয়েছে।'),
+        ),
       );
     } catch (e) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         _connecting = false;
         _connected = false;
-        _connectedAddress = null;
-        _error = e.toString().replaceFirst(
-              'Exception: ',
-              '',
-            );
+        _error = 'সংযোগ করা যায়নি: $e';
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('সংযোগ ব্যর্থ: $e'),
+        ),
+      );
     }
   }
 
   Future<void> _disconnect() async {
-    await _bluetoothService.disconnect();
+    try {
+      await _bluetoothService.disconnect();
 
-    if (!mounted) {
-      return;
+      if (!mounted) return;
+
+      setState(() {
+        _connected = false;
+        _connectedAddress = null;
+        _connecting = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = 'সংযোগ বিচ্ছিন্ন করতে সমস্যা হয়েছে: $e';
+      });
     }
-
-    setState(() {
-      _connected = false;
-      _connectedAddress = null;
-      _connecting = false;
-    });
-
-    _showMessage(
-      'ডিভাইস থেকে সংযোগ বিচ্ছিন্ন হয়েছে',
-    );
   }
 
   Future<void> _startAdvertising() async {
     try {
+      setState(() {
+        _error = null;
+      });
+
       await _bluetoothService.startAdvertising();
 
-      if (!mounted) {
-        return;
-      }
-
-      _showMessage(
-        'আপনার ফোন এখন অন্য জরুরি মেসেঞ্জার ডিভাইসের জন্য প্রস্তুত',
-      );
-    } catch (e) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
-        _error = e.toString().replaceFirst(
-              'Exception: ',
-              '',
-            );
+        _advertising = true;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Bluetooth চালু করার অনুরোধ পাঠানো হয়েছে। '
+            'অন্য ফোন থেকে স্ক্যান করে দেখুন।',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = 'Bluetooth চালু করা যায়নি: $e';
+      });
+    }
+  }
+
+  Future<void> _stopAdvertising() async {
+    try {
+      await _bluetoothService.stopAdvertising();
+
+      if (!mounted) return;
+
+      setState(() {
+        _advertising = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = 'Bluetooth বন্ধ করতে সমস্যা হয়েছে: $e';
       });
     }
   }
 
   String _deviceName(ScanResult result) {
-    final name = result.device.platformName.trim();
+    final platformName = result.device.platformName.trim();
+    final advertisedName = result.advertisementData.advName.trim();
 
-    if (name.isNotEmpty) {
-      return name;
-    }
+    if (platformName.isNotEmpty) return platformName;
+    if (advertisedName.isNotEmpty) return advertisedName;
 
-    final advertisedName =
-        result.advertisementData.advName.trim();
-
-    if (advertisedName.isNotEmpty) {
-      return advertisedName;
-    }
-
-    return 'জরুরি মেসেঞ্জার ডিভাইস';
+    return 'অজানা Bluetooth ডিভাইস';
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
-    }
+  @override
+  void dispose() {
+    // শুধু এই স্ক্রিনের নিজস্ব subscription বন্ধ হবে।
+    // BluetoothService একটি singleton; এখানে dispose করা যাবে না।
+    _devicesSubscription?.cancel();
+    _connectionSubscription?.cancel();
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-        ),
-      );
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'কাছাকাছি ডিভাইস',
-        ),
-        actions: [
-          if (_connected)
-            IconButton(
-              tooltip: 'Disconnect',
-              onPressed: _disconnect,
-              icon: const Icon(
-                Icons.bluetooth_disabled,
-              ),
-            ),
-        ],
+        title: const Text('Bluetooth সংযোগ'),
       ),
-      body: Column(
+      body: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          if (_connected)
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.fromLTRB(
-                16,
-                16,
-                16,
-                0,
-              ),
+          Card(
+            child: Padding(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                color: Theme.of(context)
-                    .colorScheme
-                    .primaryContainer,
-              ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.bluetooth_connected,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onPrimaryContainer,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment:
-                          CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Connected',
+                  const Row(
+                    children: [
+                      Icon(Icons.bluetooth, size: 30),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'কাছের ফোনের সঙ্গে সংযোগ',
                           style: TextStyle(
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onPrimaryContainer,
                           ),
                         ),
-                        if (_connectedAddress != null)
-                          Text(
-                            _connectedAddress!,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onPrimaryContainer,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    Icons.check_circle,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .onPrimaryContainer,
-                  ),
-                ],
-              ),
-            ),
-
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: FilledButton.icon(
-                    onPressed:
-                        (_scanning ||
-                                _connecting ||
-                                _connected)
-                            ? null
-                            : _scanDevices,
-                    icon: Icon(
-                      _scanning
-                          ? Icons.sync
-                          : Icons.bluetooth_searching,
-                    ),
-                    label: Text(
-                      _scanning
-                          ? 'ডিভাইস খোঁজা হচ্ছে...'
-                          : 'ডিভাইস খুঁজুন',
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 10),
-
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: OutlinedButton.icon(
-                    onPressed:
-                        (_connecting || _connected)
-                            ? null
-                            : _startAdvertising,
-                    icon: const Icon(
-                      Icons.bluetooth_audio,
-                    ),
-                    label: const Text(
-                      'আমার ফোনকে খুঁজে পাওয়ার জন্য চালু করুন',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          if (_connecting)
-            const Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: 16,
-              ),
-              child: Column(
-                children: [
-                  LinearProgressIndicator(),
-                  SizedBox(height: 8),
-                  Text(
-                    'ডিভাইসের সাথে সংযোগ করা হচ্ছে...',
-                  ),
-                ],
-              ),
-            ),
-
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 16,
-              ),
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.start,
-                    children: [
-                      const Icon(
-                        Icons.error_outline,
-                        color: Colors.red,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(_error!),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'দুটি ফোনেই জরুরি মেসেঞ্জার চালু রাখুন। '
+                    'একটি ফোনে Bluetooth বিজ্ঞাপন চালু করুন, '
+                    'অন্য ফোনে স্ক্যান করে ডিভাইসটি নির্বাচন করুন।',
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed:
+                          _scanning || _connecting ? null : _scanDevices,
+                      icon: _scanning
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Icon(Icons.search),
+                      label: Text(
+                        _scanning
+                            ? 'খোঁজা হচ্ছে...'
+                            : 'কাছের ফোন খুঁজুন',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _advertising
+                          ? _stopAdvertising
+                          : _startAdvertising,
+                      icon: Icon(
+                        _advertising
+                            ? Icons.bluetooth_disabled
+                            : Icons.bluetooth_searching,
+                      ),
+                      label: Text(
+                        _advertising
+                            ? 'Bluetooth বিজ্ঞাপন বন্ধ করুন'
+                            : 'আমার ফোনকে খুঁজে পাওয়ার জন্য চালু করুন',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Card(
+              color: theme.colorScheme.errorContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  _error!,
+                  style: TextStyle(
+                    color: theme.colorScheme.onErrorContainer,
+                  ),
                 ),
               ),
             ),
-
-          Expanded(
-            child: _devices.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text(
-                        'এখনো কোনো জরুরি মেসেঞ্জার ডিভাইস পাওয়া যায়নি।\n\n'
-                        'দুই ফোনেই Bluetooth চালু করুন।\n'
-                        'অন্য ফোনে "আমার ফোনকে খুঁজে পাওয়ার জন্য চালু করুন" চাপুন।\n'
-                        'তারপর এই ফোনে "ডিভাইস খুঁজুন" চাপুন।',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _devices.length,
-                    itemBuilder: (context, index) {
-                      final result = _devices[index];
-                      final device = result.device;
-
-                      return Card(
-                        margin: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 5,
-                        ),
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            child: Icon(
-                              Icons.phone_android,
+          ],
+          const SizedBox(height: 20),
+          if (_connected)
+            Card(
+              color: theme.colorScheme.primaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Row(
+                      children: [
+                        Icon(Icons.check_circle),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'ফোন সংযুক্ত',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 17,
                             ),
                           ),
-                          title: Text(
-                            _deviceName(result),
-                          ),
-                          subtitle: Text(
-                            device.remoteId.str,
-                          ),
-                          trailing: _connecting
-                              ? const SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child:
-                                      CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.bluetooth_connected,
-                                ),
-                          onTap: _connecting || _connected
-                              ? null
-                              : () {
-                                  _connectToDevice(
-                                    result,
-                                  );
-                                },
                         ),
-                      );
-                    },
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      _connectedAddress ?? 'সংযুক্ত ডিভাইস',
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _disconnect,
+                        icon: const Icon(Icons.link_off),
+                        label: const Text('সংযোগ বিচ্ছিন্ন করুন'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'পাওয়া ডিভাইস',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
                   ),
+                ),
+              ),
+              Text('${_devices.length}টি'),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_devices.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Column(
+                children: [
+                  Icon(Icons.bluetooth_searching, size: 48),
+                  SizedBox(height: 12),
+                  Text(
+                    'এখনো কোনো ডিভাইস পাওয়া যায়নি।',
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    'অন্য ফোনে Bluetooth বিজ্ঞাপন চালু করে আবার খুঁজুন।',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            )
+          else
+            ..._devices.map((result) {
+              final name = _deviceName(result);
+              final address = result.device.remoteId.toString();
+
+              return Card(
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.phone_android),
+                  ),
+                  title: Text(name),
+                  subtitle: Text(address),
+                  trailing: _connecting
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.chevron_right),
+                  onTap: _connecting || _connected
+                      ? null
+                      : () => _connectToDevice(result),
+                ),
+              );
+            }),
+          const SizedBox(height: 20),
+          const Text(
+            'মনে রাখবেন: Bluetooth চালু থাকা, প্রয়োজনীয় অনুমতি দেওয়া '
+            'এবং অন্য ফোনে অ্যাপের বিজ্ঞাপন চালু থাকা প্রয়োজন। '
+            'বাস্তব ফোনে পরীক্ষা না করা পর্যন্ত সংযোগ ও বার্তা আদান-প্রদান '
+            'সম্পূর্ণ কাজ করছে বলে নিশ্চিত হওয়া যাবে না।',
+            style: TextStyle(fontSize: 12),
           ),
         ],
       ),
