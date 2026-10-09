@@ -15,7 +15,17 @@ class BluetoothService {
   static const String characteristicUuid =
       '0000fee1-0000-1000-8000-00805f9b34fb';
 
+  static final BluetoothService _instance =
+      BluetoothService._internal();
+
+  factory BluetoothService() => _instance;
+
+  BluetoothService._internal() {
+    _nativeChannel.setMethodCallHandler(_handleNativeMethod);
+  }
+
   StreamSubscription<List<ScanResult>>? _scanSubscription;
+  StreamSubscription<List<int>>? _valueSubscription;
 
   final StreamController<List<ScanResult>> _devicesController =
       StreamController<List<ScanResult>>.broadcast();
@@ -31,6 +41,9 @@ class BluetoothService {
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _characteristic;
 
+  bool _advertising = false;
+  bool _disposed = false;
+
   Stream<List<ScanResult>> get devicesStream =>
       _devicesController.stream;
 
@@ -40,63 +53,43 @@ class BluetoothService {
   Stream<String> get connectionStream =>
       _connectionController.stream;
 
-  BluetoothDevice? get connectedDevice =>
-      _connectedDevice;
+  BluetoothDevice? get connectedDevice => _connectedDevice;
 
-  bool get isConnected =>
-      _connectedDevice != null;
+  bool get isConnected => _connectedDevice != null;
 
-  BluetoothService() {
-    _nativeChannel.setMethodCallHandler(
-      _handleNativeMethod,
-    );
-  }
+  bool get isAdvertising => _advertising;
 
-  Future<void> _handleNativeMethod(
-    MethodCall call,
-  ) async {
+  Future<void> _handleNativeMethod(MethodCall call) async {
     switch (call.method) {
       case 'messageReceived':
-        final message =
-            call.arguments?.toString() ?? '';
-
-        if (message.isNotEmpty) {
+        final message = call.arguments?.toString() ?? '';
+        if (message.isNotEmpty && !_messageController.isClosed) {
           _messageController.add(message);
         }
         break;
 
       case 'deviceConnected':
-        final address =
-            call.arguments?.toString() ?? '';
-
-        _connectionController.add(
-          'connected:$address',
-        );
+        final address = call.arguments?.toString() ?? '';
+        _connectionController.add('server_connected:$address');
         break;
 
       case 'deviceDisconnected':
-        final address =
-            call.arguments?.toString() ?? '';
-
-        _connectionController.add(
-          'disconnected:$address',
-        );
+        final address = call.arguments?.toString() ?? '';
+        _connectionController.add('server_disconnected:$address');
         break;
 
       case 'advertisingStarted':
-        _connectionController.add(
-          'advertising_started',
-        );
+        _advertising = true;
+        _connectionController.add('advertising_started');
+        break;
+
+      case 'messageSent':
+        _connectionController.add('message_sent');
         break;
 
       case 'bluetoothError':
-        final error =
-            call.arguments?.toString() ??
-                'Bluetooth error';
-
-        _connectionController.add(
-          'error:$error',
-        );
+        final error = call.arguments?.toString() ?? 'Bluetooth error';
+        _connectionController.add('error:$error');
         break;
     }
   }
@@ -108,20 +101,14 @@ class BluetoothService {
       Permission.bluetoothAdvertise,
     ];
 
-    final result =
-        await permissions.request();
+    final result = await permissions.request();
 
-    return result.values.every(
-      (status) => status.isGranted,
-    );
+    return result.values.every((status) => status.isGranted);
   }
 
   Future<bool> isBluetoothAvailable() async {
     try {
-      final state =
-          await FlutterBluePlus.adapterState.first;
-
-      return state ==
+      return await FlutterBluePlus.adapterState.first ==
           BluetoothAdapterState.on;
     } catch (_) {
       return false;
@@ -129,110 +116,65 @@ class BluetoothService {
   }
 
   Future<void> startAdvertising() async {
-    final permissionGranted =
-        await requestPermissions();
-
-    if (!permissionGranted) {
-      throw Exception(
-        'Bluetooth permission denied',
-      );
+    if (!await requestPermissions()) {
+      throw Exception('Bluetooth permission denied');
     }
 
-    final bluetoothOn =
-        await isBluetoothAvailable();
-
-    if (!bluetoothOn) {
-      throw Exception(
-        'Bluetooth is turned off',
-      );
+    if (!await isBluetoothAvailable()) {
+      throw Exception('Bluetooth is turned off');
     }
 
-    await _nativeChannel.invokeMethod(
-      'startAdvertising',
-    );
+    await _nativeChannel.invokeMethod<void>('startAdvertising');
   }
 
   Future<void> stopAdvertising() async {
     try {
-      await _nativeChannel.invokeMethod(
-        'stopAdvertising',
-      );
+      await _nativeChannel.invokeMethod<void>('stopAdvertising');
     } catch (_) {}
+
+    _advertising = false;
   }
 
   Future<void> startScan() async {
-    final permissionGranted =
-        await requestPermissions();
-
-    if (!permissionGranted) {
-      throw Exception(
-        'Bluetooth permission denied',
-      );
+    if (!await requestPermissions()) {
+      throw Exception('Bluetooth permission denied');
     }
 
-    final bluetoothOn =
-        await isBluetoothAvailable();
-
-    if (!bluetoothOn) {
-      throw Exception(
-        'Bluetooth is turned off',
-      );
+    if (!await isBluetoothAvailable()) {
+      throw Exception('Bluetooth is turned off');
     }
-
-    _devices.clear();
-
-    _devicesController.add([]);
 
     await stopScan();
 
-    _scanSubscription =
-        FlutterBluePlus.scanResults.listen(
-      (results) {
-        for (final result in results) {
-          final device = result.device;
+    _devices.clear();
+    _devicesController.add([]);
 
-          if (device.remoteId.str.isEmpty) {
-            continue;
-          }
+    _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+      for (final result in results) {
+        final id = result.device.remoteId.str;
 
-          final serviceUuids =
-              result.advertisementData.serviceUuids
-                  .map(
-                    (uuid) =>
-                        uuid.toString().toLowerCase(),
-                  )
-                  .toList();
+        if (id.isEmpty) continue;
 
-          final hasOurService =
-              serviceUuids.contains(
-            serviceUuid,
-          );
+        final serviceUuids = result.advertisementData.serviceUuids
+            .map((uuid) => uuid.toString().toLowerCase())
+            .toList();
 
-          if (!hasOurService) {
-            continue;
-          }
-
-          _devices[device.remoteId.str] =
-              result;
+        if (serviceUuids.contains(serviceUuid)) {
+          _devices[id] = result;
         }
+      }
 
-        final sortedDevices =
-            _devices.values.toList();
+      final sorted = _devices.values.toList()
+        ..sort((a, b) => b.rssi.compareTo(a.rssi));
 
-        sortedDevices.sort(
-          (a, b) => b.rssi.compareTo(a.rssi),
-        );
-
-        _devicesController.add(
-          sortedDevices,
-        );
-      },
-    );
+      if (!_devicesController.isClosed) {
+        _devicesController.add(sorted);
+      }
+    });
 
     await FlutterBluePlus.startScan(
-      timeout: const Duration(
-        seconds: 10,
-      ),
+      withServices: [Guid(serviceUuid)],
+      timeout: const Duration(seconds: 10),
     );
   }
 
@@ -242,20 +184,12 @@ class BluetoothService {
     } catch (_) {}
 
     await _scanSubscription?.cancel();
-
     _scanSubscription = null;
   }
 
-  Future<void> connectToDevice(
-    ScanResult result,
-  ) async {
-    final permissionGranted =
-        await requestPermissions();
-
-    if (!permissionGranted) {
-      throw Exception(
-        'Bluetooth permission denied',
-      );
+  Future<void> connectToDevice(ScanResult result) async {
+    if (!await requestPermissions()) {
+      throw Exception('Bluetooth permission denied');
     }
 
     await stopScan();
@@ -264,126 +198,125 @@ class BluetoothService {
 
     try {
       await device.connect(
-        timeout: const Duration(
-          seconds: 15,
-        ),
+        timeout: const Duration(seconds: 15),
         autoConnect: false,
         license: License.free,
       );
-    } catch (e) {
-      final errorText =
-          e.toString();
-
-      if (!errorText.contains(
-        'already connected',
-      )) {
-        throw Exception(
-          'Connection failed: $errorText',
-        );
+    } catch (error) {
+      if (!error.toString().toLowerCase().contains('already connected')) {
+        throw Exception('Connection failed: $error');
       }
     }
 
     _connectedDevice = device;
 
-    final services =
-        await device.discoverServices();
+    try {
+      final services = await device.discoverServices();
 
-    BluetoothCharacteristic?
-        targetCharacteristic;
+      BluetoothCharacteristic? target;
 
-    for (final service in services) {
-      if (service.uuid
-              .toString()
-              .toLowerCase() !=
-          serviceUuid) {
-        continue;
-      }
-
-      for (final characteristic
-          in service.characteristics) {
-        if (characteristic.uuid
-                .toString()
-                .toLowerCase() ==
-            characteristicUuid) {
-          targetCharacteristic =
-              characteristic;
-          break;
+      for (final service in services) {
+        if (service.uuid.toString().toLowerCase() != serviceUuid) {
+          continue;
         }
-      }
 
-      if (targetCharacteristic !=
-          null) {
-        break;
-      }
-    }
-
-    if (targetCharacteristic ==
-        null) {
-      await disconnect();
-
-      throw Exception(
-        'Joruri Messenger service not found',
-      );
-    }
-
-    _characteristic =
-        targetCharacteristic;
-
-    if (targetCharacteristic
-        .properties
-        .notify) {
-      await targetCharacteristic
-          .setNotifyValue(true);
-
-      targetCharacteristic
-          .lastValueStream
-          .listen(
-        (value) {
-          if (value.isEmpty) {
-            return;
+        for (final characteristic in service.characteristics) {
+          if (characteristic.uuid.toString().toLowerCase() ==
+              characteristicUuid) {
+            target = characteristic;
+            break;
           }
+        }
+
+        if (target != null) break;
+      }
+
+      if (target == null) {
+        throw Exception('Joruri Messenger service not found');
+      }
+
+      _characteristic = target;
+
+      await _valueSubscription?.cancel();
+      _valueSubscription = null;
+
+      if (target.properties.notify || target.properties.indicate) {
+        await target.setNotifyValue(true);
+
+        _valueSubscription = target.lastValueStream.listen((value) {
+          if (value.isEmpty || _messageController.isClosed) return;
 
           try {
-            final message =
-                utf8.decode(value);
+            final message = utf8.decode(value);
+            _messageController.add(message);
+          } catch (_) {
+            _connectionController.add('error:Invalid message encoding');
+          }
+        });
+      }
 
-            _messageController
-                .add(message);
-          } catch (_) {}
-        },
-      );
+      _connectionController.add('connected:${device.remoteId.str}');
+    } catch (error) {
+      await disconnect();
+      rethrow;
     }
-
-    _connectionController.add(
-      'connected:${device.remoteId.str}',
-    );
   }
 
-  Future<void> sendMessage(
-    String message,
-  ) async {
-    final characteristic =
-        _characteristic;
+  /// Sends through the client connection when available.
+  /// Otherwise asks the native GATT server to notify its connected peer.
+  Future<void> sendMessage(String message) async {
+    if (message.isEmpty) return;
 
-    if (_connectedDevice == null ||
-        characteristic == null) {
-      throw Exception(
-        'No device connected',
-      );
+    final characteristic = _characteristic;
+    final device = _connectedDevice;
+
+    if (device != null && characteristic != null) {
+      final data = utf8.encode(message);
+
+      // A single GATT write may be limited by the negotiated MTU.
+      if (data.length > 180) {
+        throw Exception(
+          'মেসেজটি খুব বড়। আপাতত ১৮০ বাইটের মধ্যে পাঠান।',
+        );
+      }
+
+      if (characteristic.properties.write) {
+        await characteristic.write(
+          data,
+          withoutResponse: false,
+        );
+        return;
+      }
+
+      if (characteristic.properties.writeWithoutResponse) {
+        await characteristic.write(
+          data,
+          withoutResponse: true,
+        );
+        return;
+      }
+
+      throw Exception('এই সংযোগে মেসেজ পাঠানোর অনুমতি নেই');
     }
 
-    final data =
-        utf8.encode(message);
+    if (_advertising) {
+      await _nativeChannel.invokeMethod<void>(
+        'sendMessage',
+        <String, dynamic>{'message': message},
+      );
+      return;
+    }
 
-    await characteristic.write(
-      data,
-      withoutResponse: false,
+    throw Exception(
+      'কোনো Bluetooth ফোন সংযুক্ত নেই। আগে ফোন খুঁজে সংযোগ করুন।',
     );
   }
 
   Future<void> disconnect() async {
-    final device =
-        _connectedDevice;
+    await _valueSubscription?.cancel();
+    _valueSubscription = null;
+
+    final device = _connectedDevice;
 
     _characteristic = null;
     _connectedDevice = null;
@@ -394,22 +327,20 @@ class BluetoothService {
       } catch (_) {}
     }
 
-    _connectionController.add(
-      'disconnected',
-    );
+    _connectionController.add('disconnected');
   }
 
+  /// Call only when the app-wide Bluetooth service is no longer needed.
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+
     await stopScan();
-
     await disconnect();
-
     await stopAdvertising();
 
     await _devicesController.close();
-
     await _messageController.close();
-
     await _connectionController.close();
   }
 }
