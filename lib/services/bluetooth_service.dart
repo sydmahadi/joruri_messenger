@@ -44,38 +44,57 @@ class BluetoothService {
   bool _advertising = false;
   bool _disposed = false;
 
+  // Client ফোনের অনুমোদনের অবস্থা।
+  bool _connectionApproved = false;
+
+  // Server ফোনের অনুমোদনের অবস্থা।
+  bool _serverConnectionApproved = false;
+
+  String? _pendingRequesterId;
+  String? _serverConnectedAddress;
+
   Stream<List<ScanResult>> get devicesStream =>
       _devicesController.stream;
 
-  Stream<String> get messageStream =>
-      _messageController.stream;
+  Stream<String> get messageStream => _messageController.stream;
 
-  Stream<String> get connectionStream =>
-      _connectionController.stream;
+  Stream<String> get connectionStream => _connectionController.stream;
 
   BluetoothDevice? get connectedDevice => _connectedDevice;
 
-  bool get isConnected => _connectedDevice != null;
+  bool get isConnected =>
+      (_connectedDevice != null && _connectionApproved) ||
+      _serverConnectionApproved;
+
+  bool get isConnectionPending =>
+      (_connectedDevice != null && !_connectionApproved) ||
+      (_serverConnectedAddress != null &&
+          !_serverConnectionApproved);
 
   bool get isAdvertising => _advertising;
 
   Future<void> _handleNativeMethod(MethodCall call) async {
     switch (call.method) {
       case 'messageReceived':
-        final message = call.arguments?.toString() ?? '';
-        if (message.isNotEmpty && !_messageController.isClosed) {
-          _messageController.add(message);
-        }
+        _handleIncomingRaw(call.arguments?.toString() ?? '');
         break;
 
       case 'deviceConnected':
-        final address = call.arguments?.toString() ?? '';
-        _connectionController.add('server_connected:$address');
+        _serverConnectedAddress = call.arguments?.toString() ?? '';
+        _serverConnectionApproved = false;
+        _pendingRequesterId = null;
+
+        _connectionController.add(
+          'server_pending:$_serverConnectedAddress',
+        );
         break;
 
       case 'deviceDisconnected':
-        final address = call.arguments?.toString() ?? '';
-        _connectionController.add('server_disconnected:$address');
+        _serverConnectedAddress = null;
+        _serverConnectionApproved = false;
+        _pendingRequesterId = null;
+
+        _connectionController.add('server_disconnected');
         break;
 
       case 'advertisingStarted':
@@ -93,6 +112,54 @@ class BluetoothService {
         break;
     }
   }
+
+  void _handleIncomingRaw(String raw) {
+    if (raw.isEmpty) return;
+
+    try {
+      final decoded = jsonDecode(raw);
+
+      if (decoded is Map) {
+        final data = Map<String, dynamic>.from(decoded);
+        final type = data['type']?.toString();
+
+        if (type == 'connection_accepted') {
+          final requesterId = data['requesterId']?.toString();
+
+          if (requesterId == null ||
+              requesterId == _localRequesterId) {
+            _connectionApproved = true;
+            _connectionController.add('connection_accepted');
+          }
+          return;
+        }
+
+        if (type == 'connection_rejected') {
+          final requesterId = data['requesterId']?.toString();
+
+          if (requesterId == null ||
+              requesterId == _localRequesterId) {
+            _connectionApproved = false;
+            _connectionController.add('connection_rejected');
+          }
+          return;
+        }
+
+        if (type == 'connection_request') {
+          _pendingRequesterId = data['senderId']?.toString();
+        }
+      }
+    } catch (_) {
+      // সাধারণ চ্যাট মেসেজ হলে নিচে পাঠানো হবে।
+    }
+
+    if (!_messageController.isClosed) {
+      _messageController.add(raw);
+    }
+  }
+
+  // সংযোগের অনুরোধকারী ফোনের ID।
+  String? _localRequesterId;
 
   Future<bool> requestPermissions() async {
     final permissions = <Permission>[
@@ -121,7 +188,7 @@ class BluetoothService {
     }
 
     if (!await isBluetoothAvailable()) {
-      throw Exception('Bluetooth is turned off');
+      throw Exception('Bluetooth বন্ধ আছে');
     }
 
     await _nativeChannel.invokeMethod<void>('startAdvertising');
@@ -141,7 +208,7 @@ class BluetoothService {
     }
 
     if (!await isBluetoothAvailable()) {
-      throw Exception('Bluetooth is turned off');
+      throw Exception('Bluetooth বন্ধ আছে');
     }
 
     await stopScan();
@@ -152,7 +219,6 @@ class BluetoothService {
     _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
         final id = result.device.remoteId.str;
-
         if (id.isEmpty) continue;
 
         final serviceUuids = result.advertisementData.serviceUuids
@@ -209,6 +275,7 @@ class BluetoothService {
     }
 
     _connectedDevice = device;
+    _connectionApproved = false;
 
     try {
       final services = await device.discoverServices();
@@ -220,10 +287,10 @@ class BluetoothService {
           continue;
         }
 
-        for (final characteristic in service.characteristics) {
-          if (characteristic.uuid.toString().toLowerCase() ==
+        for (final item in service.characteristics) {
+          if (item.uuid.toString().toLowerCase() ==
               characteristicUuid) {
-            target = characteristic;
+            target = item;
             break;
           }
         }
@@ -232,7 +299,7 @@ class BluetoothService {
       }
 
       if (target == null) {
-        throw Exception('Joruri Messenger service not found');
+        throw Exception('Joruri Messenger service পাওয়া যায়নি');
       }
 
       _characteristic = target;
@@ -244,62 +311,123 @@ class BluetoothService {
         await target.setNotifyValue(true);
 
         _valueSubscription = target.lastValueStream.listen((value) {
-          if (value.isEmpty || _messageController.isClosed) return;
+          if (value.isEmpty) return;
 
           try {
-            final message = utf8.decode(value);
-            _messageController.add(message);
+            _handleIncomingRaw(utf8.decode(value));
           } catch (_) {
             _connectionController.add('error:Invalid message encoding');
           }
         });
       }
 
-      _connectionController.add('connected:${device.remoteId.str}');
+      _connectionController.add(
+        'connection_pending:${device.remoteId.str}',
+      );
     } catch (error) {
       await disconnect();
       rethrow;
     }
   }
 
-  /// Sends through the client connection when available.
-  /// Otherwise asks the native GATT server to notify its connected peer.
+  // অন্য ফোনে সংযোগের অনুরোধ পাঠাবে।
+  Future<void> requestConnection({
+    required String senderId,
+    required String senderName,
+  }) async {
+    final characteristic = _characteristic;
+
+    if (_connectedDevice == null || characteristic == null) {
+      throw Exception('আগে একটি ফোন নির্বাচন করুন');
+    }
+
+    _localRequesterId = senderId;
+    _connectionApproved = false;
+
+    final request = jsonEncode({
+      'type': 'connection_request',
+      'senderId': senderId,
+      'senderName': senderName,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+
+    await _writeToConnectedDevice(request);
+    _connectionController.add('connection_request_sent');
+  }
+
+  // গ্রহণ বা প্রত্যাখ্যানের উত্তর server ফোন থেকে পাঠাবে।
+  Future<void> respondToConnectionRequest({
+    required bool accepted,
+    required String requesterId,
+  }) async {
+    if (_serverConnectedAddress == null) {
+      throw Exception('অনুরোধকারী ফোন সংযুক্ত নেই');
+    }
+
+    final response = jsonEncode({
+      'type': accepted
+          ? 'connection_accepted'
+          : 'connection_rejected',
+      'requesterId': requesterId,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
+
+    // Native sendMessage server-এর connected peer-কে notify করে।
+    await _nativeChannel.invokeMethod<void>(
+      'sendMessage',
+      <String, dynamic>{'message': response},
+    );
+
+    if (accepted) {
+      _serverConnectionApproved = true;
+      _connectionController.add('connection_accepted');
+    } else {
+      _serverConnectionApproved = false;
+      _connectionController.add('connection_rejected');
+    }
+  }
+
+  Future<void> _writeToConnectedDevice(String message) async {
+    final characteristic = _characteristic;
+
+    if (characteristic == null) {
+      throw Exception('Bluetooth characteristic পাওয়া যায়নি');
+    }
+
+    final data = utf8.encode(message);
+
+    if (data.length > 180) {
+      throw Exception('মেসেজটি খুব বড়।');
+    }
+
+    if (characteristic.properties.write) {
+      await characteristic.write(data, withoutResponse: false);
+      return;
+    }
+
+    if (characteristic.properties.writeWithoutResponse) {
+      await characteristic.write(data, withoutResponse: true);
+      return;
+    }
+
+    throw Exception('এই সংযোগে মেসেজ পাঠানো যাচ্ছে না');
+  }
+
   Future<void> sendMessage(String message) async {
     if (message.isEmpty) return;
 
-    final characteristic = _characteristic;
-    final device = _connectedDevice;
-
-    if (device != null && characteristic != null) {
-      final data = utf8.encode(message);
-
-      // A single GATT write may be limited by the negotiated MTU.
-      if (data.length > 180) {
-        throw Exception(
-          'মেসেজটি খুব বড়। আপাতত ১৮০ বাইটের মধ্যে পাঠান।',
-        );
-      }
-
-      if (characteristic.properties.write) {
-        await characteristic.write(
-          data,
-          withoutResponse: false,
-        );
-        return;
-      }
-
-      if (characteristic.properties.writeWithoutResponse) {
-        await characteristic.write(
-          data,
-          withoutResponse: true,
-        );
-        return;
-      }
-
-      throw Exception('এই সংযোগে মেসেজ পাঠানোর অনুমতি নেই');
+    if (!isConnected) {
+      throw Exception(
+        'সংযোগ এখনো অনুমোদিত হয়নি। অন্য ফোনে অনুরোধ গ্রহণ করতে হবে।',
+      );
     }
 
-    if (_advertising) {
+    if (_connectedDevice != null && _characteristic != null) {
+      await _writeToConnectedDevice(message);
+      return;
+    }
+
+    if (_advertising && _serverConnectionApproved) {
       await _nativeChannel.invokeMethod<void>(
         'sendMessage',
         <String, dynamic>{'message': message},
@@ -307,9 +435,7 @@ class BluetoothService {
       return;
     }
 
-    throw Exception(
-      'কোনো Bluetooth ফোন সংযুক্ত নেই। আগে ফোন খুঁজে সংযোগ করুন।',
-    );
+    throw Exception('অনুমোদিত Bluetooth সংযোগ পাওয়া যায়নি');
   }
 
   Future<void> disconnect() async {
@@ -320,6 +446,8 @@ class BluetoothService {
 
     _characteristic = null;
     _connectedDevice = null;
+    _connectionApproved = false;
+    _localRequesterId = null;
 
     if (device != null) {
       try {
@@ -330,7 +458,6 @@ class BluetoothService {
     _connectionController.add('disconnected');
   }
 
-  /// Call only when the app-wide Bluetooth service is no longer needed.
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
