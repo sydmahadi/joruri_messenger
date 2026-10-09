@@ -75,21 +75,17 @@ class _PrivateMessageScreenState
       createdAt: DateTime.now(),
       isEmergency: false,
       isDelivered: false,
+      messageType: 'private',
+      recipientId: recipientId,
     );
 
     try {
-      // প্রথমে মেসেজটি এই ফোনে সংরক্ষণ।
+      // প্রথমে এই ফোনে মেসেজ সংরক্ষণ।
       await LocalStorageService.saveMessage(message);
 
-      // বর্তমান Bluetooth ব্যবস্থায় প্রাপকের ID
-      // দিয়ে নির্দিষ্ট ফোন নির্বাচন করা হয় না।
-      // তাই এটি শুধু বিদ্যমান সংযোগে পাঠানোর চেষ্টা।
+      // বিদ্যমান Bluetooth সংযোগে পাঠানোর চেষ্টা।
       await BluetoothService().sendMessage(
-        jsonEncode({
-          ...message.toMap(),
-          'messageType': 'private',
-          'recipientId': recipientId,
-        }),
+        jsonEncode(message.toMap()),
       );
 
       _messageController.clear();
@@ -204,9 +200,9 @@ class _PrivateMessageScreenState
                 padding: EdgeInsets.all(16),
                 child: Text(
                   'সতর্কতা: মেসেজ এখনো এনক্রিপ্ট করা হয় না। '
-                  'প্রাপকের ID যাচাই ও নির্দিষ্ট প্রাপকের কাছে '
-                  'পৌঁছানোর ব্যবস্থাও সম্পূর্ণ নয়। সংবেদনশীল '
-                  'তথ্য পাঠাবেন না।',
+                  'প্রাপকের ID দিয়ে নির্দিষ্ট ফোনে পাঠানো '
+                  'বা প্রাপকের পরিচয় যাচাই করার ব্যবস্থা '
+                  'এখনো সম্পূর্ণ নয়। সংবেদনশীল তথ্য পাঠাবেন না।',
                   style: TextStyle(height: 1.5),
                 ),
               ),
