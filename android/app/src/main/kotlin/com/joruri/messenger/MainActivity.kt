@@ -1,4 +1,3 @@
-
 package com.joruri.joruri_messenger
 
 import android.Manifest
@@ -40,6 +39,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private lateinit var methodChannel: MethodChannel
+
     private var bluetoothGattServer: BluetoothGattServer? = null
     private var bluetoothLeAdvertiser: BluetoothLeAdvertiser? = null
     private var connectedDevice: BluetoothDevice? = null
@@ -91,13 +91,27 @@ class MainActivity : FlutterActivity() {
                 "sendMessage" -> {
                     val message = call.argument<String>("message")
 
-                    if (message.isNullOrEmpty()) {
-                        result.error("INVALID_MESSAGE", "Message is empty", null)
-                    } else if (connectedDevice == null) {
-                        result.error("NOT_CONNECTED", "No device is connected", null)
-                    } else {
-                        sendMessage(message)
-                        result.success(true)
+                    when {
+                        message.isNullOrEmpty() -> {
+                            result.error(
+                                "INVALID_MESSAGE",
+                                "Message is empty",
+                                null
+                            )
+                        }
+
+                        connectedDevice == null -> {
+                            result.error(
+                                "NOT_CONNECTED",
+                                "No device is connected",
+                                null
+                            )
+                        }
+
+                        else -> {
+                            sendMessage(message)
+                            result.success(true)
+                        }
                     }
                 }
 
@@ -107,12 +121,14 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun isBluetoothEnabled(): Boolean {
-        val manager =
-            getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-
         return try {
+            val manager =
+                getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+
             manager.adapter?.isEnabled == true
         } catch (_: SecurityException) {
+            false
+        } catch (_: Exception) {
             false
         }
     }
@@ -130,7 +146,10 @@ class MainActivity : FlutterActivity() {
 
     private fun startBluetoothServer() {
         if (!isBluetoothEnabled()) {
-            methodChannel.invokeMethod("bluetoothError", "Bluetooth is turned off")
+            methodChannel.invokeMethod(
+                "bluetoothError",
+                "Bluetooth is turned off"
+            )
             return
         }
 
@@ -164,6 +183,7 @@ class MainActivity : FlutterActivity() {
                 SERVICE_UUID,
                 BluetoothGattService.SERVICE_TYPE_PRIMARY
             )
+
             service.addCharacteristic(characteristic)
 
             if (!server.addService(service)) {
@@ -190,14 +210,22 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun startAdvertising() {
-        if (!hasBluetoothPermission()) return
+        if (!hasBluetoothPermission()) {
+            methodChannel.invokeMethod(
+                "bluetoothError",
+                "Bluetooth permission is required"
+            )
+            return
+        }
 
         try {
-            val adapter =
-                (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager)
-                    .adapter
+            val manager =
+                getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
 
-            val advertiser: BluetoothLeAdvertiser? = adapter.bluetoothLeAdvertiser
+            val adapter = manager.adapter
+
+            val advertiser: BluetoothLeAdvertiser? =
+                adapter.bluetoothLeAdvertiser
 
             if (advertiser == null) {
                 methodChannel.invokeMethod(
@@ -210,8 +238,12 @@ class MainActivity : FlutterActivity() {
             bluetoothLeAdvertiser = advertiser
 
             val settings = AdvertiseSettings.Builder()
-                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                .setAdvertiseMode(
+                    AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
+                )
+                .setTxPowerLevel(
+                    AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
+                )
                 .setConnectable(true)
                 .setTimeout(0)
                 .build()
@@ -221,7 +253,11 @@ class MainActivity : FlutterActivity() {
                 .addServiceUuid(android.os.ParcelUuid(SERVICE_UUID))
                 .build()
 
-            advertiser.startAdvertising(settings, data, advertiseCallback)
+            advertiser.startAdvertising(
+                settings,
+                data,
+                advertiseCallback
+            )
         } catch (e: SecurityException) {
             methodChannel.invokeMethod(
                 "bluetoothError",
@@ -236,7 +272,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
-        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+
+        override fun onStartSuccess(
+            settingsInEffect: AdvertiseSettings?
+        ) {
             runOnUiThread {
                 methodChannel.invokeMethod("advertisingStarted", null)
             }
@@ -252,107 +291,151 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private val gattServerCallback = object : BluetoothGattServerCallback() {
+    private val gattServerCallback =
+        object : BluetoothGattServerCallback() {
 
-        override fun onConnectionStateChange(
-            device: BluetoothDevice?,
-            status: Int,
-            newState: Int
-        ) {
-            super.onConnectionStateChange(device, status, newState)
-            if (device == null) return
+            override fun onConnectionStateChange(
+                device: BluetoothDevice?,
+                status: Int,
+                newState: Int
+            ) {
+                super.onConnectionStateChange(device, status, newState)
 
-            if (newState == BluetoothProfile.STATE_CONNECTED) {
-                connectedDevice = device
-                runOnUiThread {
-                    methodChannel.invokeMethod("deviceConnected", device.address)
-                }
-            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                if (connectedDevice?.address == device.address) {
-                    connectedDevice = null
-                }
-                runOnUiThread {
-                    methodChannel.invokeMethod("deviceDisconnected", device.address)
-                }
-            }
-        }
+                if (device == null) return
 
-        override fun onDescriptorWriteRequest(
-            device: BluetoothDevice?,
-            requestId: Int,
-            descriptor: BluetoothGattDescriptor?,
-            preparedWrite: Boolean,
-            responseNeeded: Boolean,
-            offset: Int,
-            value: ByteArray?
-        ) {
-            super.onDescriptorWriteRequest(
-                device, requestId, descriptor, preparedWrite,
-                responseNeeded, offset, value
-            )
+                if (newState == BluetoothProfile.STATE_CONNECTED) {
+                    connectedDevice = device
 
-            if (descriptor?.uuid == DESCRIPTOR_UUID) {
-                descriptor.value = value
-                if (responseNeeded) {
-                    bluetoothGattServer?.sendResponse(
-                        device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value
-                    )
+                    runOnUiThread {
+                        methodChannel.invokeMethod(
+                            "deviceConnected",
+                            device.address
+                        )
+                    }
+                } else if (
+                    newState == BluetoothProfile.STATE_DISCONNECTED
+                ) {
+                    if (connectedDevice?.address == device.address) {
+                        connectedDevice = null
+                    }
+
+                    runOnUiThread {
+                        methodChannel.invokeMethod(
+                            "deviceDisconnected",
+                            device.address
+                        )
+                    }
                 }
             }
-        }
 
-        override fun onCharacteristicReadRequest(
-            device: BluetoothDevice?,
-            requestId: Int,
-            offset: Int,
-            characteristic: BluetoothGattCharacteristic?
-        ) {
-            super.onCharacteristicReadRequest(device, requestId, offset, characteristic)
-
-            if (characteristic?.uuid == CHARACTERISTIC_UUID) {
-                bluetoothGattServer?.sendResponse(
+            override fun onDescriptorWriteRequest(
+                device: BluetoothDevice?,
+                requestId: Int,
+                descriptor: BluetoothGattDescriptor?,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray?
+            ) {
+                super.onDescriptorWriteRequest(
                     device,
                     requestId,
-                    BluetoothGatt.GATT_SUCCESS,
+                    descriptor,
+                    preparedWrite,
+                    responseNeeded,
                     offset,
-                    characteristic.value ?: byteArrayOf()
+                    value
                 )
-            }
-        }
 
-        override fun onCharacteristicWriteRequest(
-            device: BluetoothDevice?,
-            requestId: Int,
-            characteristic: BluetoothGattCharacteristic?,
-            preparedWrite: Boolean,
-            responseNeeded: Boolean,
-            offset: Int,
-            value: ByteArray?
-        ) {
-            super.onCharacteristicWriteRequest(
-                device, requestId, characteristic, preparedWrite,
-                responseNeeded, offset, value
-            )
+                if (descriptor?.uuid == DESCRIPTOR_UUID) {
+                    descriptor.value = value
 
-            if (characteristic?.uuid == CHARACTERISTIC_UUID) {
-                val message = value?.toString(Charsets.UTF_8) ?: ""
-
-                runOnUiThread {
-                    methodChannel.invokeMethod("messageReceived", message)
+                    if (responseNeeded) {
+                        bluetoothGattServer?.sendResponse(
+                            device,
+                            requestId,
+                            BluetoothGatt.GATT_SUCCESS,
+                            offset,
+                            value
+                        )
+                    }
                 }
+            }
 
-                if (responseNeeded) {
+            override fun onCharacteristicReadRequest(
+                device: BluetoothDevice?,
+                requestId: Int,
+                offset: Int,
+                characteristic: BluetoothGattCharacteristic?
+            ) {
+                super.onCharacteristicReadRequest(
+                    device,
+                    requestId,
+                    offset,
+                    characteristic
+                )
+
+                if (characteristic?.uuid == CHARACTERISTIC_UUID) {
                     bluetoothGattServer?.sendResponse(
-                        device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value
+                        device,
+                        requestId,
+                        BluetoothGatt.GATT_SUCCESS,
+                        offset,
+                        characteristic.value ?: byteArrayOf()
                     )
                 }
             }
+
+            override fun onCharacteristicWriteRequest(
+                device: BluetoothDevice?,
+                requestId: Int,
+                characteristic: BluetoothGattCharacteristic?,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray?
+            ) {
+                super.onCharacteristicWriteRequest(
+                    device,
+                    requestId,
+                    characteristic,
+                    preparedWrite,
+                    responseNeeded,
+                    offset,
+                    value
+                )
+
+                if (characteristic?.uuid == CHARACTERISTIC_UUID) {
+                    val message = value?.toString(Charsets.UTF_8) ?: ""
+
+                    runOnUiThread {
+                        methodChannel.invokeMethod(
+                            "messageReceived",
+                            message
+                        )
+                    }
+
+                    if (responseNeeded) {
+                        bluetoothGattServer?.sendResponse(
+                            device,
+                            requestId,
+                            BluetoothGatt.GATT_SUCCESS,
+                            offset,
+                            value
+                        )
+                    }
+                }
+            }
         }
-    }
 
     private fun sendMessage(message: String) {
-        val device = connectedDevice ?: run {
-            methodChannel.invokeMethod("bluetoothError", "No device is connected")
+        val device = connectedDevice
+
+        if (device == null) {
+            methodChannel.invokeMethod(
+                "bluetoothError",
+                "No device is connected"
+            )
             return
         }
 
@@ -364,7 +447,9 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        val server = bluetoothGattServer ?: run {
+        val server = bluetoothGattServer
+
+        if (server == null) {
             methodChannel.invokeMethod(
                 "bluetoothError",
                 "Bluetooth server is not running"
@@ -376,7 +461,7 @@ class MainActivity : FlutterActivity() {
             val payload = message.toByteArray(Charsets.UTF_8)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // Four-argument overload returns Int.
+                // Android 13+: this overload returns an Int status code.
                 val status: Int = server.notifyCharacteristicChanged(
                     device,
                     characteristic,
@@ -385,7 +470,10 @@ class MainActivity : FlutterActivity() {
                 )
 
                 if (status == BluetoothStatusCodes.SUCCESS) {
-                    methodChannel.invokeMethod("messageSent", message)
+                    methodChannel.invokeMethod(
+                        "messageSent",
+                        message
+                    )
                 } else {
                     methodChannel.invokeMethod(
                         "bluetoothError",
@@ -393,18 +481,22 @@ class MainActivity : FlutterActivity() {
                     )
                 }
             } else {
+                // Earlier Android versions: the overload returns Boolean.
                 characteristic.value = payload
 
-                // Three-argument overload returns Boolean.
                 @Suppress("DEPRECATION")
-                val success: Boolean = server.notifyCharacteristicChanged(
-                    device,
-                    characteristic,
-                    false
-                )
+                val success: Boolean =
+                    server.notifyCharacteristicChanged(
+                        device,
+                        characteristic,
+                        false
+                    )
 
                 if (success) {
-                    methodChannel.invokeMethod("messageSent", message)
+                    methodChannel.invokeMethod(
+                        "messageSent",
+                        message
+                    )
                 } else {
                     methodChannel.invokeMethod(
                         "bluetoothError",
