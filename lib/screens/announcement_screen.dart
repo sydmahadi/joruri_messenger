@@ -67,41 +67,29 @@ class _AnnouncementScreenState extends State<AnnouncementScreen> {
       createdAt: DateTime.now(),
       isEmergency: _isEmergency,
       isDelivered: false,
+      messageType: 'announcement',
+      recipientId: null,
     );
 
     try {
-      // প্রথমে ফোনের লোকাল স্টোরেজে ঘোষণা সংরক্ষণ।
+      // প্রথমে এই ফোনে ঘোষণা সংরক্ষণ।
       await LocalStorageService.saveMessage(message);
 
-      // বিদ্যমান Bluetooth সংযোগ দিয়ে পাঠানোর চেষ্টা।
+      // বিদ্যমান Bluetooth সংযোগে পাঠানোর চেষ্টা।
       await BluetoothService().sendMessage(
         jsonEncode(message.toMap()),
       );
 
-      // পাঠানোর চেষ্টা সফল হলে delivered হিসেবে সংরক্ষণ।
-      final deliveredMessage = Message(
-        id: message.id,
-        senderId: message.senderId,
-        senderName: message.senderName,
-        text: message.text,
-        createdAt: message.createdAt,
-        isEmergency: message.isEmergency,
-        isDelivered: true,
-      );
-
-      await LocalStorageService.saveMessage(deliveredMessage);
-
       _controller.clear();
 
       _showMessage(
-        'ঘোষণা Bluetooth সংযোগে পাঠানো হয়েছে।',
+        'ঘোষণা পাঠানোর চেষ্টা সম্পন্ন। '
+        'অন্য ফোনে পৌঁছেছে কি না নিশ্চিত নয়।',
       );
-    } catch (e) {
-      // পাঠানো ব্যর্থ হলেও ঘোষণাটি ফোনে সংরক্ষিত থাকবে।
+    } catch (_) {
       _showMessage(
-        'ঘোষণা ফোনে সংরক্ষিত হয়েছে, '
-        'কিন্তু Bluetooth-এ পাঠানো যায়নি। '
-        'সংযোগ পরীক্ষা করুন।',
+        'ঘোষণা ফোনে সংরক্ষিত আছে, কিন্তু Bluetooth-এ '
+        'পাঠানো যায়নি। সংযোগ পরীক্ষা করুন।',
       );
     } finally {
       if (mounted) {
