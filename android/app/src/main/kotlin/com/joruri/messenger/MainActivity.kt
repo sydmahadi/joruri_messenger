@@ -40,7 +40,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private lateinit var methodChannel: MethodChannel
-
     private var bluetoothGattServer: BluetoothGattServer? = null
     private var bluetoothLeAdvertiser: BluetoothLeAdvertiser? = null
     private var connectedDevice: BluetoothDevice? = null
@@ -93,17 +92,9 @@ class MainActivity : FlutterActivity() {
                     val message = call.argument<String>("message")
 
                     if (message.isNullOrEmpty()) {
-                        result.error(
-                            "INVALID_MESSAGE",
-                            "Message is empty",
-                            null
-                        )
+                        result.error("INVALID_MESSAGE", "Message is empty", null)
                     } else if (connectedDevice == null) {
-                        result.error(
-                            "NOT_CONNECTED",
-                            "No device is connected",
-                            null
-                        )
+                        result.error("NOT_CONNECTED", "No device is connected", null)
                     } else {
                         sendMessage(message)
                         result.success(true)
@@ -139,10 +130,7 @@ class MainActivity : FlutterActivity() {
 
     private fun startBluetoothServer() {
         if (!isBluetoothEnabled()) {
-            methodChannel.invokeMethod(
-                "bluetoothError",
-                "Bluetooth is turned off"
-            )
+            methodChannel.invokeMethod("bluetoothError", "Bluetooth is turned off")
             return
         }
 
@@ -176,7 +164,6 @@ class MainActivity : FlutterActivity() {
                 SERVICE_UUID,
                 BluetoothGattService.SERVICE_TYPE_PRIMARY
             )
-
             service.addCharacteristic(characteristic)
 
             if (!server.addService(service)) {
@@ -210,8 +197,7 @@ class MainActivity : FlutterActivity() {
                 (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager)
                     .adapter
 
-            val advertiser: BluetoothLeAdvertiser? =
-                adapter.bluetoothLeAdvertiser
+            val advertiser: BluetoothLeAdvertiser? = adapter.bluetoothLeAdvertiser
 
             if (advertiser == null) {
                 methodChannel.invokeMethod(
@@ -224,12 +210,8 @@ class MainActivity : FlutterActivity() {
             bluetoothLeAdvertiser = advertiser
 
             val settings = AdvertiseSettings.Builder()
-                .setAdvertiseMode(
-                    AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY
-                )
-                .setTxPowerLevel(
-                    AdvertiseSettings.ADVERTISE_TX_POWER_HIGH
-                )
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
                 .setConnectable(true)
                 .setTimeout(0)
                 .build()
@@ -239,11 +221,7 @@ class MainActivity : FlutterActivity() {
                 .addServiceUuid(android.os.ParcelUuid(SERVICE_UUID))
                 .build()
 
-            advertiser.startAdvertising(
-                settings,
-                data,
-                advertiseCallback
-            )
+            advertiser.startAdvertising(settings, data, advertiseCallback)
         } catch (e: SecurityException) {
             methodChannel.invokeMethod(
                 "bluetoothError",
@@ -258,7 +236,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private val advertiseCallback = object : AdvertiseCallback() {
-
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
             runOnUiThread {
                 methodChannel.invokeMethod("advertisingStarted", null)
@@ -283,31 +260,19 @@ class MainActivity : FlutterActivity() {
             newState: Int
         ) {
             super.onConnectionStateChange(device, status, newState)
-
             if (device == null) return
 
-            if (
-                status == BluetoothGatt.GATT_SUCCESS &&
-                newState == BluetoothProfile.STATE_CONNECTED
-            ) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
                 connectedDevice = device
-
                 runOnUiThread {
-                    methodChannel.invokeMethod(
-                        "deviceConnected",
-                        device.address
-                    )
+                    methodChannel.invokeMethod("deviceConnected", device.address)
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 if (connectedDevice?.address == device.address) {
                     connectedDevice = null
                 }
-
                 runOnUiThread {
-                    methodChannel.invokeMethod(
-                        "deviceDisconnected",
-                        device.address
-                    )
+                    methodChannel.invokeMethod("deviceDisconnected", device.address)
                 }
             }
         }
@@ -322,25 +287,15 @@ class MainActivity : FlutterActivity() {
             value: ByteArray?
         ) {
             super.onDescriptorWriteRequest(
-                device,
-                requestId,
-                descriptor,
-                preparedWrite,
-                responseNeeded,
-                offset,
-                value
+                device, requestId, descriptor, preparedWrite,
+                responseNeeded, offset, value
             )
 
             if (descriptor?.uuid == DESCRIPTOR_UUID) {
                 descriptor.value = value
-
                 if (responseNeeded) {
                     bluetoothGattServer?.sendResponse(
-                        device,
-                        requestId,
-                        BluetoothGatt.GATT_SUCCESS,
-                        offset,
-                        value
+                        device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value
                     )
                 }
             }
@@ -352,12 +307,7 @@ class MainActivity : FlutterActivity() {
             offset: Int,
             characteristic: BluetoothGattCharacteristic?
         ) {
-            super.onCharacteristicReadRequest(
-                device,
-                requestId,
-                offset,
-                characteristic
-            )
+            super.onCharacteristicReadRequest(device, requestId, offset, characteristic)
 
             if (characteristic?.uuid == CHARACTERISTIC_UUID) {
                 bluetoothGattServer?.sendResponse(
@@ -380,13 +330,8 @@ class MainActivity : FlutterActivity() {
             value: ByteArray?
         ) {
             super.onCharacteristicWriteRequest(
-                device,
-                requestId,
-                characteristic,
-                preparedWrite,
-                responseNeeded,
-                offset,
-                value
+                device, requestId, characteristic, preparedWrite,
+                responseNeeded, offset, value
             )
 
             if (characteristic?.uuid == CHARACTERISTIC_UUID) {
@@ -398,11 +343,7 @@ class MainActivity : FlutterActivity() {
 
                 if (responseNeeded) {
                     bluetoothGattServer?.sendResponse(
-                        device,
-                        requestId,
-                        BluetoothGatt.GATT_SUCCESS,
-                        offset,
-                        value
+                        device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value
                     )
                 }
             }
@@ -411,10 +352,7 @@ class MainActivity : FlutterActivity() {
 
     private fun sendMessage(message: String) {
         val device = connectedDevice ?: run {
-            methodChannel.invokeMethod(
-                "bluetoothError",
-                "No device is connected"
-            )
+            methodChannel.invokeMethod("bluetoothError", "No device is connected")
             return
         }
 
@@ -438,8 +376,8 @@ class MainActivity : FlutterActivity() {
             val payload = message.toByteArray(Charsets.UTF_8)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // Android 13+: this overload returns an Int status.
-                val status = server.notifyCharacteristicChanged(
+                // Four-argument overload returns Int.
+                val status: Int = server.notifyCharacteristicChanged(
                     device,
                     characteristic,
                     false,
@@ -455,11 +393,11 @@ class MainActivity : FlutterActivity() {
                     )
                 }
             } else {
-                // Older Android versions: this overload returns Boolean.
                 characteristic.value = payload
 
+                // Three-argument overload returns Boolean.
                 @Suppress("DEPRECATION")
-                val success = server.notifyCharacteristicChanged(
+                val success: Boolean = server.notifyCharacteristicChanged(
                     device,
                     characteristic,
                     false
