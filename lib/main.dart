@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -75,12 +76,18 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _loadMessages() async {
     final savedMessages = LocalStorageService.getMessages();
 
+    // শুধু সাধারণ চ্যাটের মেসেজ দেখাবে।
+    final chatMessages = savedMessages.where((message) {
+      return message.messageType == 'chat' &&
+          !message.senderName.startsWith('ঘোষণা • ');
+    }).toList();
+
     if (!mounted) return;
 
     setState(() {
       _messages
         ..clear()
-        ..addAll(savedMessages);
+        ..addAll(chatMessages);
       _isLoading = false;
     });
 
@@ -107,6 +114,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (text.isEmpty) return;
 
     Message? receivedMessage;
+    bool isStructuredMessage = false;
 
     try {
       final decoded = jsonDecode(text);
@@ -118,38 +126,67 @@ class _ChatScreenState extends State<ChatScreen> {
             map.containsKey('senderId') &&
             map.containsKey('text') &&
             map.containsKey('createdAt')) {
+          isStructuredMessage = true;
           receivedMessage = Message.fromMap(map);
         }
       }
     } catch (_) {
-      // পুরোনো সংস্করণের সাধারণ টেক্সট নিচে সামলানো হবে।
+      // ভুল JSON সাধারণ টেক্সট হিসেবে গ্রহণ করা হবে না।
+      if (text.startsWith('{') || text.startsWith('[')) {
+        return;
+      }
     }
 
+    if (isStructuredMessage && receivedMessage == null) {
+      return;
+    }
+
+    // পুরোনো সংস্করণের সাধারণ টেক্সট মেসেজ।
     receivedMessage ??= Message(
       id: const Uuid().v4(),
       senderId: 'bluetooth-peer',
       senderName: 'Bluetooth ফোন',
       text: text,
       createdAt: DateTime.now(),
+      messageType: 'chat',
     );
 
-    final alreadyExists = _messages.any(
-      (message) => message.id == receivedMessage!.id,
+    final message = receivedMessage;
+
+    // নিজের পাঠানো মেসেজ আবার গ্রহণ করলে উপেক্ষা করবে।
+    if (message.senderId == DeviceService.deviceId) {
+      return;
+    }
+
+    // ব্যক্তিগত মেসেজে প্রাপকের ID যাচাই।
+    if (message.messageType == 'private') {
+      if (message.recipientId == null ||
+          message.recipientId != DeviceService.deviceId) {
+        return;
+      }
+    }
+
+    // একই মেসেজ দ্বিতীয়বার সংরক্ষণ করবে না।
+    final savedMessages = LocalStorageService.getMessages();
+    final alreadyExists = savedMessages.any(
+      (saved) => saved.id == message.id,
     );
 
     if (alreadyExists) return;
 
-    if (receivedMessage.senderId == DeviceService.deviceId) {
-      return;
-    }
-
     try {
-      await LocalStorageService.saveMessage(receivedMessage);
+      await LocalStorageService.saveMessage(message);
 
       if (!mounted) return;
 
+      // ঘোষণা ও ব্যক্তিগত মেসেজ সাধারণ চ্যাটে দেখাবে না।
+      if (message.messageType != 'chat' ||
+          message.senderName.startsWith('ঘোষণা • ')) {
+        return;
+      }
+
       setState(() {
-        _messages.add(receivedMessage!);
+        _messages.add(message);
         _messages.sort(
           (a, b) => a.createdAt.compareTo(b.createdAt),
         );
@@ -173,7 +210,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageController.dispose();
     _scrollController.dispose();
 
-    // BluetoothService singleton; এখানে dispose করা যাবে না।
+    // BluetoothService একটি singleton।
+    // এখানে dispose করা যাবে না।
     super.dispose();
   }
 
@@ -193,6 +231,7 @@ class _ChatScreenState extends State<ChatScreen> {
       senderName: DeviceService.deviceName,
       text: text,
       createdAt: DateTime.now(),
+      messageType: 'chat',
     );
 
     try {
@@ -217,8 +256,8 @@ class _ChatScreenState extends State<ChatScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text(
-              'মেসেজ ফোনে সেভ হয়েছে, কিন্তু Bluetooth-এ পাঠানো যায়নি। '
-              'সংযোগ পরীক্ষা করুন।',
+              'মেসেজ ফোনে সেভ হয়েছে, কিন্তু Bluetooth-এ '
+              'পাঠানো যায়নি। সংযোগ পরীক্ষা করুন।',
             ),
             action: SnackBarAction(
               label: 'বিস্তারিত',
