@@ -1,21 +1,9 @@
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
 
-import 'models/message.dart';
 import 'screens/connection_screen.dart';
-import 'services/bluetooth_service.dart';
-import 'services/device_service.dart';
-import 'services/local_storage_service.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  await LocalStorageService.init();
-  await DeviceService.initialize();
-
   runApp(const JoruriMessengerApp());
 }
 
@@ -32,258 +20,33 @@ class JoruriMessengerApp extends StatelessWidget {
         colorSchemeSeed: Colors.green,
         brightness: Brightness.light,
       ),
-      home: const ChatScreen(),
+      home: const HomeScreen(),
     );
   }
 }
 
-class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
 
-  @override
-  State<ChatScreen> createState() => _ChatScreenState();
-}
-
-class _ChatScreenState extends State<ChatScreen> {
-  final TextEditingController _messageController =
-      TextEditingController();
-
-  final ScrollController _scrollController =
-      ScrollController();
-
-  final BluetoothService _bluetoothService = BluetoothService();
-
-  final List<Message> _messages = [];
-
-  StreamSubscription<String>? _messageSubscription;
-
-  bool _isLoading = true;
-  bool _isSending = false;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _loadMessages();
-    _listenForBluetoothMessages();
-  }
-
-  Future<void> _loadMessages() async {
-    final savedMessages = LocalStorageService.getMessages();
-
-    if (!mounted) return;
-
-    setState(() {
-      _messages
-        ..clear()
-        ..addAll(savedMessages);
-      _isLoading = false;
-    });
-
-    _scrollToBottom();
-  }
-
-  void _listenForBluetoothMessages() {
-    _messageSubscription =
-        _bluetoothService.messageStream.listen(
-      (rawMessage) {
-        _receiveBluetoothMessage(rawMessage);
-      },
-      onError: (Object error) {
-        if (!mounted) return;
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Bluetooth মেসেজ গ্রহণে সমস্যা: $error'),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _receiveBluetoothMessage(String rawMessage) async {
-    final text = rawMessage.trim();
-    if (text.isEmpty) return;
-
-    Message? receivedMessage;
-
-    // নতুন ফরম্যাট: সম্পূর্ণ Message JSON আকারে গ্রহণ।
-    try {
-      final decoded = jsonDecode(text);
-
-      if (decoded is Map) {
-        final map = Map<String, dynamic>.from(decoded);
-
-        if (map.containsKey('id') &&
-            map.containsKey('senderId') &&
-            map.containsKey('text') &&
-            map.containsKey('createdAt')) {
-          receivedMessage = Message.fromMap(map);
-        }
-      }
-    } catch (_) {
-      // সাধারণ টেক্সট হলে নিচের অংশে গ্রহণ করা হবে।
-    }
-
-    // পুরোনো সংস্করণ থেকে সাধারণ টেক্সট এলে সেটিও দেখানো।
-    receivedMessage ??= Message(
-      id: const Uuid().v4(),
-      senderId: 'bluetooth-peer',
-      senderName: 'Bluetooth ফোন',
-      text: text,
-      createdAt: DateTime.now(),
-    );
-
-    // একই ID-এর মেসেজ পুনরায় এলে বাদ দেওয়া।
-    final alreadyExists = _messages.any(
-      (message) => message.id == receivedMessage!.id,
-    );
-
-    if (alreadyExists) return;
-
-    // নিজের পাঠানো মেসেজ আবার ফিরে এলে দ্বিতীয়বার দেখাবে না।
-    if (receivedMessage.senderId == DeviceService.deviceId) {
-      return;
-    }
-
-    try {
-      await LocalStorageService.saveMessage(receivedMessage);
-
-      if (!mounted) return;
-
-      setState(() {
-        _messages.add(receivedMessage!);
-        _messages.sort(
-          (a, b) => a.createdAt.compareTo(b.createdAt),
-        );
-      });
-
-      _scrollToBottom();
-    } catch (error) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('আসা মেসেজ সেভ করা যায়নি: $error'),
-        ),
-      );
-    }
-  }
-
-  @override
-  void dispose() {
-    _messageSubscription?.cancel();
-
-    _messageController.dispose();
-    _scrollController.dispose();
-
-    // BluetoothService একটি singleton।
-    // এখানে এর dispose() কল করা যাবে না।
-
-    super.dispose();
-  }
-
-  Future<void> _sendMessage() async {
-    if (_isSending) return;
-
-    final text = _messageController.text.trim();
-    if (text.isEmpty) return;
-
-    setState(() {
-      _isSending = true;
-    });
-
-    final message = Message(
-      id: const Uuid().v4(),
-      senderId: DeviceService.deviceId,
-      senderName: DeviceService.deviceName,
-      text: text,
-      createdAt: DateTime.now(),
-    );
-
-    try {
-      // প্রথমে ফোনে মেসেজ সেভ হবে।
-      await LocalStorageService.saveMessage(message);
-
-      if (!mounted) return;
-
-      setState(() {
-        _messages.add(message);
-      });
-
-      _messageController.clear();
-      _scrollToBottom();
-
-      // এরপর Bluetooth দিয়ে অন্য ফোনে পাঠানোর চেষ্টা।
-      try {
-        await _bluetoothService.sendMessage(
-          jsonEncode(message.toMap()),
-        );
-      } catch (error) {
-        if (!mounted) return;
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text(
-              'মেসেজ ফোনে সেভ হয়েছে, কিন্তু Bluetooth-এ পাঠানো যায়নি। '
-              'সংযোগ পরীক্ষা করুন।',
-            ),
-            action: SnackBarAction(
-              label: 'বিস্তারিত',
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('$error')),
-                );
-              },
-            ),
-          ),
-        );
-      }
-    } catch (error) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('মেসেজ সেভ করা যায়নি: $error'),
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSending = false;
-        });
-      }
-    }
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
-
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
-    });
-  }
-
-  String _shortDeviceId(String id) {
-    if (id.length <= 8) return id;
-    return id.substring(0, 8);
-  }
-
-  void _openConnectionScreen() {
+  void _openScreen(BuildContext context, Widget screen) {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => const ConnectionScreen(),
+      MaterialPageRoute(builder: (_) => screen),
+    );
+  }
+
+  void _showComingSoon(BuildContext context, String feature) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$feature স্ক্রিন পরের ধাপে তৈরি করা হবে।'),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -292,239 +55,186 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Connection',
-            onPressed: _openConnectionScreen,
-            icon: const Icon(Icons.link),
+            tooltip: 'সংযোগ',
+            onPressed: () => _openScreen(
+              context,
+              const ConnectionScreen(),
+            ),
+            icon: const Icon(Icons.bluetooth_connected),
           ),
         ],
       ),
       body: SafeArea(
-        child: Column(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
           children: [
-            Expanded(
-              child: _isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(),
-                    )
-                  : _messages.isEmpty
-                      ? const _EmptyChatView()
-                      : ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.fromLTRB(
-                            12,
-                            16,
-                            12,
-                            16,
-                          ),
-                          itemCount: _messages.length,
-                          itemBuilder: (context, index) {
-                            final message = _messages[index];
-
-                            final isMine =
-                                message.senderId ==
-                                DeviceService.deviceId;
-
-                            return _MessageBubble(
-                              message: message,
-                              deviceId: _shortDeviceId(
-                                message.senderId,
-                              ),
-                              isMine: isMine,
-                            );
-                          },
-                        ),
-            ),
-            _MessageInputBar(
-              controller: _messageController,
-              isSending: _isSending,
-              onSend: _sendMessage,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptyChatView extends StatelessWidget {
-  const _EmptyChatView();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(30),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
+            const SizedBox(height: 16),
             Icon(
-              Icons.forum_outlined,
-              size: 72,
-              color: Theme.of(context).colorScheme.primary,
+              Icons.emergency_rounded,
+              size: 76,
+              color: colors.primary,
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
             const Text(
-              'কোনো মেসেজ নেই',
+              'সংযুক্ত থাকুন, প্রস্তুত থাকুন',
+              textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 21,
+                fontSize: 23,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'উপরের Connection বাটন থেকে\n'
-              'কাছাকাছি ফোনের সাথে সংযোগ করুন।',
+            Text(
+              'স্থানীয় ডিভাইসের মাধ্যমে যোগাযোগের জন্য '
+              'একটি সুবিধা বেছে নিন।',
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 15,
+                fontSize: 14,
                 height: 1.5,
+                color: colors.onSurfaceVariant,
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+            const SizedBox(height: 32),
 
-class _MessageBubble extends StatelessWidget {
-  final Message message;
-  final String deviceId;
-  final bool isMine;
-
-  const _MessageBubble({
-    required this.message,
-    required this.deviceId,
-    required this.isMine,
-  });
-
-  String _formatTime(DateTime time) {
-    final hour = time.hour.toString().padLeft(2, '0');
-    final minute = time.minute.toString().padLeft(2, '0');
-    return '$hour:$minute';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Align(
-      alignment:
-          isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.78,
-        ),
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 10,
-        ),
-        decoration: BoxDecoration(
-          color: isMine
-              ? theme.colorScheme.primary
-              : theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isMine ? 16 : 4),
-            bottomRight: Radius.circular(isMine ? 4 : 16),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: isMine
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.text,
-              style: TextStyle(
-                fontSize: 16,
-                height: 1.4,
-                color: isMine
-                    ? theme.colorScheme.onPrimary
-                    : theme.colorScheme.onSurface,
-              ),
+            _HomeFeatureCard(
+              icon: Icons.campaign_rounded,
+              title: 'ঘোষণা',
+              subtitle:
+                  'সবার জন্য জরুরি বার্তা তৈরি ও পাঠানোর ব্যবস্থা।',
+              buttonText: 'ঘোষণা খুলুন',
+              color: colors.primaryContainer,
+              iconColor: colors.onPrimaryContainer,
+              onTap: () => _showComingSoon(context, 'ঘোষণা'),
             ),
-            const SizedBox(height: 4),
-            Text(
-              '${isMine ? 'আমি' : message.senderName}: '
-              '$deviceId • ${_formatTime(message.createdAt)}',
-              style: TextStyle(
-                fontSize: 10,
-                color: isMine
-                    ? theme.colorScheme.onPrimary
-                        .withValues(alpha: 0.75)
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
+
+            const SizedBox(height: 16),
+
+            _HomeFeatureCard(
+              icon: Icons.lock_rounded,
+              title: 'ব্যক্তিগত মেসেজ',
+              subtitle:
+                  'নির্দিষ্ট ব্যক্তির জন্য গোপনীয় মেসেজের ব্যবস্থা।',
+              buttonText: 'ব্যক্তিগত মেসেজ খুলুন',
+              color: colors.secondaryContainer,
+              iconColor: colors.onSecondaryContainer,
+              onTap: () =>
+                  _showComingSoon(context, 'ব্যক্তিগত মেসেজ'),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
-class _MessageInputBar extends StatelessWidget {
-  final TextEditingController controller;
-  final bool isSending;
-  final VoidCallback onSend;
+            const SizedBox(height: 16),
 
-  const _MessageInputBar({
-    required this.controller,
-    required this.isSending,
-    required this.onSend,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
-          ),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 5,
-              textInputAction: TextInputAction.newline,
-              decoration: InputDecoration(
-                hintText: 'মেসেজ লিখুন...',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 12,
-                ),
-              ),
-              onSubmitted: (_) => onSend(),
+            _HomeFeatureCard(
+              icon: Icons.chat_rounded,
+              title: 'বর্তমান চ্যাট',
+              subtitle:
+                  'আগের সাধারণ Bluetooth চ্যাট স্ক্রিনটি ব্যবহার করুন।',
+              buttonText: 'চ্যাট খুলুন',
+              color: colors.surfaceContainerHighest,
+              iconColor: colors.onSurface,
+              onTap: () => _showComingSoon(context, 'বর্তমান চ্যাট'),
             ),
-          ),
-          const SizedBox(width: 8),
-          IconButton.filled(
-            onPressed: isSending ? null : onSend,
-            icon: isSending
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
+
+            const SizedBox(height: 24),
+
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: colors.primary,
                     ),
-                  )
-                : const Icon(Icons.send),
-            iconSize: 22,
-          ),
-        ],
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'ঘোষণা, ব্যক্তিগত এনক্রিপশন ও ফোনের মাধ্যমে '
+                        'মেসেজ রিলে করার কার্যকর ব্যবস্থা পরবর্তী '
+                        'ধাপগুলোতে তৈরি হবে। এখনো এই স্ক্রিনগুলো '
+                        'সম্পূর্ণ কার্যকর নয়।',
+                        style: TextStyle(height: 1.5),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeFeatureCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String buttonText;
+  final Color color;
+  final Color iconColor;
+  final VoidCallback onTap;
+
+  const _HomeFeatureCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.buttonText,
+    required this.color,
+    required this.iconColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 1,
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 27,
+              backgroundColor: color,
+              child: Icon(
+                icon,
+                size: 28,
+                color: iconColor,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              subtitle,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.5,
+                color: Theme.of(context)
+                    .colorScheme
+                    .onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: onTap,
+                icon: Icon(icon),
+                label: Text(buttonText),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
