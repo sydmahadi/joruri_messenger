@@ -6,7 +6,6 @@ import 'package:uuid/uuid.dart';
 
 import 'models/message.dart';
 import 'screens/connection_screen.dart';
-import 'screens/home_screen.dart';
 import 'services/bluetooth_service.dart';
 import 'services/device_service.dart';
 import 'services/local_storage_service.dart';
@@ -36,6 +35,7 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
 
   StreamSubscription<String>? _requestSubscription;
   bool _dialogOpen = false;
+
   final List<Map<String, String>> _pendingRequests = [];
 
   @override
@@ -63,7 +63,6 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
 
       if (requesterId.isEmpty) return;
 
-      // একই অনুরোধ একাধিকবার এলে ডুপ্লিকেট দেখাবে না।
       final exists = _pendingRequests.any(
         (item) => item['requesterId'] == requesterId,
       );
@@ -77,7 +76,7 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
 
       _showNextRequest();
     } catch (_) {
-      // সাধারণ চ্যাট মেসেজ এই listener উপেক্ষা করবে।
+      // সাধারণ চ্যাট মেসেজ এখানে উপেক্ষা করা হবে।
     }
   }
 
@@ -85,6 +84,7 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
     if (_dialogOpen || _pendingRequests.isEmpty) return;
 
     final context = appNavigatorKey.currentContext;
+
     if (context == null || !context.mounted) return;
 
     _dialogOpen = true;
@@ -104,7 +104,9 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
               children: [
                 Icon(Icons.bluetooth_connected),
                 SizedBox(width: 10),
-                Expanded(child: Text('সংযোগের অনুরোধ')),
+                Expanded(
+                  child: Text('সংযোগের অনুরোধ'),
+                ),
               ],
             ),
             content: Text(
@@ -156,7 +158,9 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
       if (currentContext != null && currentContext.mounted) {
         ScaffoldMessenger.of(currentContext).showSnackBar(
           SnackBar(
-            content: Text('অনুরোধের উত্তর পাঠানো যায়নি: $error'),
+            content: Text(
+              'অনুরোধের উত্তর পাঠানো যায়নি: $error',
+            ),
           ),
         );
       }
@@ -172,7 +176,6 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
 
       _dialogOpen = false;
 
-      // পরের অনুরোধ থাকলে সেটিও দেখাবে।
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _showNextRequest();
       });
@@ -196,8 +199,9 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
         colorSchemeSeed: Colors.green,
         brightness: Brightness.light,
       ),
-      home: const HomeScreen(),
+      home: const ChatScreen(),
       routes: {
+        '/home': (_) => const ChatScreen(),
         '/chat': (_) => const ChatScreen(),
         '/connection': (_) => const ConnectionScreen(),
       },
@@ -267,7 +271,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Bluetooth মেসেজ গ্রহণে সমস্যা: $error'),
+            content: Text(
+              'Bluetooth মেসেজ গ্রহণে সমস্যা: $error',
+            ),
           ),
         );
       },
@@ -300,7 +306,9 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _receiveBluetoothMessage(String rawMessage) async {
+  Future<void> _receiveBluetoothMessage(
+    String rawMessage,
+  ) async {
     final text = rawMessage.trim();
 
     if (text.isEmpty) return;
@@ -311,10 +319,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (decoded is Map) {
         final data = Map<String, dynamic>.from(decoded);
 
-        // অনুরোধের ডায়ালগ মূল অ্যাপ দেখাবে।
         if (data['type'] == 'connection_request') return;
 
-        // সংযোগের প্রোটোকল মেসেজ চ্যাটে দেখাবে না।
         if (data['type'] == 'connection_accepted' ||
             data['type'] == 'connection_rejected') {
           return;
@@ -349,10 +355,12 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
     } catch (_) {
-      // সাধারণ টেক্সট মেসেজ হিসেবে গ্রহণ করা হবে।
+      // সাধারণ টেক্সট মেসেজ হিসেবেও গ্রহণ করা হবে।
     }
 
-    if (isStructuredMessage && receivedMessage == null) return;
+    if (isStructuredMessage && receivedMessage == null) {
+      return;
+    }
 
     receivedMessage ??= Message(
       id: const Uuid().v4(),
@@ -424,6 +432,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isSending) return;
 
     final text = _messageController.text.trim();
+
     if (text.isEmpty) return;
 
     if (!_bluetoothService.isConnected) {
@@ -479,7 +488,9 @@ class _ChatScreenState extends State<ChatScreen> {
               label: 'বিস্তারিত',
               onPressed: () {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('$error')),
+                  SnackBar(
+                    content: Text('$error'),
+                  ),
                 );
               },
             ),
@@ -536,14 +547,14 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'বর্তমান চ্যাট',
+          'জরুরি মেসেঞ্জার',
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         actions: [
-          IconButton(
-            tooltip: 'Connection',
+          TextButton.icon(
             onPressed: _openConnectionScreen,
             icon: const Icon(Icons.link),
+            label: const Text('Connection'),
           ),
         ],
       ),
@@ -586,7 +597,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
                             final isMine =
                                 message.senderId ==
-                                DeviceService.deviceId;
+                                    DeviceService.deviceId;
 
                             return _MessageBubble(
                               message: message,
