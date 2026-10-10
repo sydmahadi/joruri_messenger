@@ -1,3 +1,4 @@
+
 name: Build Joruri Messenger APK
 
 on:
@@ -19,11 +20,9 @@ jobs:
         with:
           channel: stable
 
-      - name: Remove old Android project
-        run: rm -rf android
-
-      - name: Create fresh Android project
+      - name: Create Android project
         run: |
+          rm -rf android
           flutter create . \
             --platforms=android \
             --org com.joruri \
@@ -34,8 +33,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
-          text = manifest.read_text()
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          text = path.read_text()
 
           permissions = """
               <uses-feature
@@ -87,7 +86,7 @@ jobs:
               1
           )
 
-          manifest.write_text(text)
+          path.write_text(text)
           PY
 
       - name: Create native Bluetooth MainActivity
@@ -122,25 +121,21 @@ jobs:
           import java.util.UUID
 
           class MainActivity : FlutterActivity() {
-
               companion object {
                   private const val CHANNEL = "joruri_messenger/bluetooth"
 
                   private val SERVICE_UUID = UUID.fromString(
                       "0000FEE0-0000-1000-8000-00805F9B34FB"
                   )
-
                   private val CHARACTERISTIC_UUID = UUID.fromString(
                       "0000FEE1-0000-1000-8000-00805F9B34FB"
                   )
-
                   private val CCCD_UUID = UUID.fromString(
                       "00002902-0000-1000-8000-00805F9B34FB"
                   )
               }
 
               private lateinit var channel: MethodChannel
-
               private var gattServer: BluetoothGattServer? = null
               private var advertiser: BluetoothLeAdvertiser? = null
               private var connectedDevice: BluetoothDevice? = null
@@ -188,20 +183,13 @@ jobs:
                                       "Message is empty",
                                       null
                                   )
-                              } else if (sendMessage(message)) {
-                                  result.success(true)
                               } else {
-                                  result.error(
-                                      "MESSAGE_SEND_FAILED",
-                                      "Message could not be sent",
-                                      null
-                                  )
+                                  result.success(sendMessage(message))
                               }
                           }
 
-                          "getBluetoothState" -> {
+                          "getBluetoothState" ->
                               result.success(isBluetoothEnabled())
-                          }
 
                           else -> result.notImplemented()
                       }
@@ -214,24 +202,20 @@ jobs:
                       PackageManager.PERMISSION_GRANTED
               }
 
-              private fun hasConnectPermission(): Boolean {
-                  return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+              private fun hasConnectPermission(): Boolean =
+                  Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                       hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
-              }
 
-              private fun hasAdvertisePermission(): Boolean {
-                  return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+              private fun hasAdvertisePermission(): Boolean =
+                  Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                       hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
-              }
 
               private fun isBluetoothEnabled(): Boolean {
                   if (!hasConnectPermission()) return false
-
                   return try {
                       val manager = getSystemService(
                           Context.BLUETOOTH_SERVICE
                       ) as BluetoothManager
-
                       manager.adapter?.isEnabled == true
                   } catch (_: Exception) {
                       false
@@ -250,9 +234,7 @@ jobs:
                   ) as BluetoothManager
 
                   val adapter = manager.adapter
-                      ?: throw IllegalStateException(
-                          "Bluetooth is unavailable"
-                      )
+                      ?: throw IllegalStateException("Bluetooth unavailable")
 
                   if (!adapter.isEnabled) {
                       throw IllegalStateException(
@@ -289,8 +271,8 @@ jobs:
                       SERVICE_UUID,
                       BluetoothGattService.SERVICE_TYPE_PRIMARY
                   )
-
                   service.addCharacteristic(newCharacteristic)
+
                   characteristic = newCharacteristic
                   advertiser = bleAdvertiser
                   serviceReady = false
@@ -303,21 +285,16 @@ jobs:
                       "GATT server চালু করা যায়নি"
                   )
 
-                  val added = gattServer?.addService(service) == true
-
-                  if (!added) {
+                  if (gattServer?.addService(service) != true) {
                       stopBluetoothServer()
                       throw IllegalStateException(
-                          "Bluetooth service যোগ করার অনুরোধ ব্যর্থ হয়েছে"
+                          "Bluetooth service যোগ করা যায়নি"
                       )
                   }
-
-                  // Advertising starts only inside onServiceAdded()
               }
 
               private fun startAdvertisingAfterServiceAdded() {
                   if (advertising || !serviceReady) return
-
                   val bleAdvertiser = advertiser ?: return
 
                   try {
@@ -357,12 +334,10 @@ jobs:
 
               private val advertiseCallback =
                   object : AdvertiseCallback() {
-
                       override fun onStartSuccess(
                           settingsInEffect: AdvertiseSettings?
                       ) {
                           advertising = true
-
                           runOnUiThread {
                               channel.invokeMethod(
                                   "advertisingStarted",
@@ -381,7 +356,6 @@ jobs:
 
               private val gattCallback =
                   object : BluetoothGattServerCallback() {
-
                       override fun onServiceAdded(
                           status: Int,
                           service: BluetoothGattService
@@ -405,7 +379,6 @@ jobs:
                       ) {
                           if (newState == BluetoothProfile.STATE_CONNECTED) {
                               connectedDevice = device
-
                               runOnUiThread {
                                   channel.invokeMethod(
                                       "deviceConnected",
@@ -418,7 +391,6 @@ jobs:
                               if (connectedDevice?.address == device.address) {
                                   connectedDevice = null
                               }
-
                               runOnUiThread {
                                   channel.invokeMethod(
                                       "deviceDisconnected",
@@ -434,8 +406,8 @@ jobs:
                           offset: Int,
                           characteristic: BluetoothGattCharacteristic
                       ) {
-                          val value = characteristic.value ?: byteArrayOf()
-
+                          val value =
+                              characteristic.value ?: byteArrayOf()
                           gattServer?.sendResponse(
                               device,
                               requestId,
@@ -454,20 +426,9 @@ jobs:
                           offset: Int,
                           value: ByteArray
                       ) {
-                          if (characteristic.uuid != CHARACTERISTIC_UUID) {
-                              if (responseNeeded) {
-                                  gattServer?.sendResponse(
-                                      device,
-                                      requestId,
-                                      BluetoothGatt.GATT_FAILURE,
-                                      offset,
-                                      null
-                                  )
-                              }
-                              return
-                          }
-
-                          if (offset != 0 || preparedWrite) {
+                          if (characteristic.uuid != CHARACTERISTIC_UUID ||
+                              offset != 0 || preparedWrite
+                          ) {
                               if (responseNeeded) {
                                   gattServer?.sendResponse(
                                       device,
@@ -493,7 +454,6 @@ jobs:
                           }
 
                           val message = value.toString(Charsets.UTF_8)
-
                           runOnUiThread {
                               channel.invokeMethod(
                                   "messageReceived",
@@ -508,14 +468,12 @@ jobs:
                           offset: Int,
                           descriptor: BluetoothGattDescriptor
                       ) {
-                          val value = descriptor.value ?: byteArrayOf(0, 0)
-
                           gattServer?.sendResponse(
                               device,
                               requestId,
                               BluetoothGatt.GATT_SUCCESS,
                               offset,
-                              value
+                              descriptor.value ?: byteArrayOf(0, 0)
                           )
                       }
 
@@ -530,7 +488,6 @@ jobs:
                       ) {
                           if (descriptor.uuid == CCCD_UUID && offset == 0) {
                               descriptor.value = value
-
                               if (responseNeeded) {
                                   gattServer?.sendResponse(
                                       device,
@@ -558,52 +515,28 @@ jobs:
                   val device = connectedDevice ?: return false
                   val server = gattServer ?: return false
                   val target = characteristic ?: return false
-
                   val payload = message.toByteArray(Charsets.UTF_8)
 
                   return try {
-                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                      if (Build.VERSION.SDK_INT >=
+                          Build.VERSION_CODES.TIRAMISU
+                      ) {
                           val status = server.notifyCharacteristicChanged(
                               device,
                               target,
                               false,
                               payload
                           )
-
-                          if (status == BluetoothStatusCodes.SUCCESS) {
-                              runOnUiThread {
-                                  channel.invokeMethod(
-                                      "messageSent",
-                                      message
-                                  )
-                              }
-                              true
-                          } else {
-                              false
-                          }
+                          status == BluetoothStatusCodes.SUCCESS
                       } else {
                           target.value = payload
-
                           @Suppress("DEPRECATION")
-                          val success = server.notifyCharacteristicChanged(
+                          server.notifyCharacteristicChanged(
                               device,
                               target,
                               false
                           )
-
-                          if (success) {
-                              runOnUiThread {
-                                  channel.invokeMethod(
-                                      "messageSent",
-                                      message
-                                  )
-                              }
-                          }
-
-                          success
                       }
-                  } catch (_: SecurityException) {
-                      false
                   } catch (_: Exception) {
                       false
                   }
@@ -614,8 +547,7 @@ jobs:
                       if (hasConnectPermission() && hasAdvertisePermission()) {
                           advertiser?.stopAdvertising(advertiseCallback)
                       }
-                  } catch (_: Exception) {
-                  }
+                  } catch (_: Exception) {}
 
                   advertiser = null
                   advertising = false
@@ -623,8 +555,7 @@ jobs:
 
                   try {
                       gattServer?.close()
-                  } catch (_: Exception) {
-                  }
+                  } catch (_: Exception) {}
 
                   gattServer = null
                   connectedDevice = null
