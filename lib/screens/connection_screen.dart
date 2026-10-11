@@ -16,6 +16,8 @@ class ConnectionScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -25,199 +27,139 @@ class ConnectionScreen extends StatelessWidget {
           ),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Text(
-            'কানেকশনের মাধ্যম নির্বাচন করুন',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            const SizedBox(height: 16),
+
+            Icon(
+              Icons.bluetooth_connected,
+              size: 76,
+              color: colors.primary,
             ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Internet ছাড়াই কাছাকাছি ফোনের সাথে '
-            'মেসেজ আদান-প্রদান করুন।',
-            style: TextStyle(
-              fontSize: 14,
-              color: Theme.of(context)
-                  .colorScheme
-                  .onSurfaceVariant,
+
+            const SizedBox(height: 18),
+
+            const Text(
+              'Bluetooth সংযোগ',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          ),
-          const SizedBox(height: 24),
 
-          _ConnectionCard(
-            icon: Icons.bluetooth,
-            title: 'Bluetooth',
-            description:
-                'কাছাকাছি জরুরি মেসেঞ্জার ফোন খুঁজে '
-                'Bluetooth-এর মাধ্যমে যুক্ত করুন।',
-            buttonText: 'Bluetooth ডিভাইস খুঁজুন',
-            onPressed: () {
-              _openBluetooth(context);
-            },
-          ),
+            const SizedBox(height: 10),
 
-          const SizedBox(height: 14),
+            Text(
+              'Internet ছাড়াই কাছাকাছি থাকা '
+              'জরুরি মেসেঞ্জার ফোনের সঙ্গে '
+              'Bluetooth-এর মাধ্যমে সংযোগ করুন।',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 15,
+                height: 1.6,
+                color: colors.onSurfaceVariant,
+              ),
+            ),
 
-          _ConnectionCard(
-            icon: Icons.wifi,
-            title: 'Wi-Fi',
-            description:
-                'একই Wi-Fi network-এ থাকা ফোনের '
-                'সাথে local connection তৈরি করুন।',
-            buttonText: 'Wi-Fi connection',
-            onPressed: () {
-              _showComingSoon(
-                context,
-                'Wi-Fi connection পরের ধাপে চালু করা হবে।',
-              );
-            },
-          ),
+            const SizedBox(height: 30),
 
-          const SizedBox(height: 14),
+            Card(
+              elevation: 2,
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    CircleAvatar(
+                      radius: 34,
+                      backgroundColor:
+                          colors.primaryContainer,
+                      child: Icon(
+                        Icons.bluetooth,
+                        size: 38,
+                        color: colors.onPrimaryContainer,
+                      ),
+                    ),
 
-          _ConnectionCard(
-            icon: Icons.wifi_tethering,
-            title: 'Hotspot',
-            description:
-                'একটি ফোনের Hotspot ব্যবহার করে '
-                'Internet ছাড়াই local network তৈরি করুন।',
-            buttonText: 'Hotspot connection',
-            onPressed: () {
-              _showComingSoon(
-                context,
-                'Hotspot connection পরের ধাপে চালু করা হবে।',
-              );
-            },
-          ),
+                    const SizedBox(height: 18),
 
-          const SizedBox(height: 24),
+                    const Text(
+                      'Bluetooth',
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
 
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                crossAxisAlignment:
-                    CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'জরুরি মেসেঞ্জার Internet বা SMS-এর '
-                      'উপর নির্ভর করবে না। Bluetooth, Wi-Fi '
-                      'ও Hotspot-এর মাধ্যমে local communication '
-                      'ব্যবহার করা হবে।',
+                    const SizedBox(height: 8),
+
+                    Text(
+                      'কাছাকাছি ফোন খুঁজুন এবং '
+                      'সংযোগের অনুরোধ পাঠান। '
+                      'অন্য ফোনে অনুরোধ গ্রহণ করা হলে '
+                      'চ্যাট শুরু করতে পারবেন।',
+                      textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 14,
                         height: 1.5,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurfaceVariant,
+                        color: colors.onSurfaceVariant,
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
-  void _showComingSoon(
-    BuildContext context,
-    String message,
-  ) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-        ),
-      );
-  }
-}
+                    const SizedBox(height: 22),
 
-class _ConnectionCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String description;
-  final String buttonText;
-  final VoidCallback onPressed;
-
-  const _ConnectionCard({
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.buttonText,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme =
-        Theme.of(context).colorScheme;
-
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 24,
-                  backgroundColor:
-                      colorScheme.primaryContainer,
-                  child: Icon(
-                    icon,
-                    color: colorScheme
-                        .onPrimaryContainer,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: FilledButton.icon(
+                        onPressed: () {
+                          _openBluetooth(context);
+                        },
+                        icon: const Icon(
+                          Icons.bluetooth_searching,
+                        ),
+                        label: const Text(
+                          'Bluetooth ডিভাইস খুঁজুন',
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              description,
-              style: TextStyle(
-                fontSize: 14,
-                height: 1.4,
-                color: colorScheme
-                    .onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              height: 46,
-              child: OutlinedButton.icon(
-                onPressed: onPressed,
-                icon: Icon(icon),
-                label: Text(buttonText),
+
+            const SizedBox(height: 22),
+
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: colors.primary,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'এই অ্যাপের বর্তমান Connection '
+                        'স্ক্রিনে শুধু Bluetooth ব্যবহার করা হবে। '
+                        'সংযোগ করতে উভয় ফোনে Bluetooth চালু '
+                        'রাখুন এবং প্রয়োজনীয় অনুমতি দিন।',
+                        style: TextStyle(
+                          fontSize: 14,
+                          height: 1.6,
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
