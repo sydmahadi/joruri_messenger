@@ -5,212 +5,190 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import 'models/message.dart';
+import 'screens/bluetooth_devices_screen.dart';
 import 'screens/connection_screen.dart';
 import 'services/bluetooth_service.dart';
-import 'services/device_service.dart';
-import 'services/local_storage_service.dart';
+import 'services/storage_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await LocalStorageService.init();
-  await DeviceService.initialize();
+  await StorageService.init();
 
-  runApp(const JoruriMessengerApp());
+  final bluetoothService = BluetoothService();
+  await bluetoothService.initialize();
+
+  runApp(JoruriMessengerApp(bluetoothService: bluetoothService));
 }
 
-final GlobalKey<NavigatorState> appNavigatorKey =
-    GlobalKey<NavigatorState>();
-
 class JoruriMessengerApp extends StatefulWidget {
-  const JoruriMessengerApp({super.key});
+  final BluetoothService bluetoothService;
+
+  const JoruriMessengerApp({
+    super.key,
+    required this.bluetoothService,
+  });
 
   @override
-  State<JoruriMessengerApp> createState() =>
-      _JoruriMessengerAppState();
+  State<JoruriMessengerApp> createState() => _JoruriMessengerAppState();
 }
 
 class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
-  final BluetoothService _bluetooth = BluetoothService();
+  final List<Map<String, dynamic>> _pendingRequests = [];
+  StreamSubscription<dynamic>? _messageSubscription;
+  bool _showingRequestDialog = false;
 
-  StreamSubscription<String>? _requestSubscription;
-  bool _dialogOpen = false;
-
-  final List<Map<String, String>> _pendingRequests = [];
+  BluetoothService get _bluetooth => widget.bluetoothService;
 
   @override
   void initState() {
     super.initState();
 
-    _requestSubscription = _bluetooth.messageStream.listen(
-      _handleIncomingRequest,
+    _messageSubscription = _bluetooth.messageStream.listen(
+      _handleIncomingMessage,
+      onError: (Object error) {
+        debugPrint('Message stream error: $error');
+      },
     );
   }
 
-  void _handleIncomingRequest(String raw) {
+  void _handleIncomingMessage(dynamic rawMessage) {
+    if (rawMessage is! String) return;
+
     try {
-      final decoded = jsonDecode(raw);
+      final decoded = jsonDecode(rawMessage);
 
-      if (decoded is! Map) return;
+      if (decoded is! Map<String, dynamic>) return;
+      if (decoded['type'] != 'connection_request') return;
 
-      final data = Map<String, dynamic>.from(decoded);
-
-      if (data['type'] != 'connection_request') return;
-
-      final requesterId = data['senderId']?.toString() ?? '';
+      final requesterId = decoded['requesterId']?.toString() ?? '';
       final requesterName =
-          data['senderName']?.toString() ?? 'অজানা ফোন';
+          decoded['requesterName']?.toString().trim().isNotEmpty == true
+              ? decoded['requesterName'].toString()
+              : 'অজানা ডিভাইস';
 
       if (requesterId.isEmpty) return;
 
-      final exists = _pendingRequests.any(
-        (item) => item['requesterId'] == requesterId,
+      final alreadyQueued = _pendingRequests.any(
+        (request) => request['requesterId'] == requesterId,
       );
 
-      if (exists) return;
+      if (alreadyQueued) return;
 
       _pendingRequests.add({
         'requesterId': requesterId,
         'requesterName': requesterName,
       });
 
-      _showNextRequest();
-    } catch (_) {
-      // সাধারণ চ্যাট মেসেজ এখানে উপেক্ষা করা হবে।
+      _showNextRequestDialog();
+    } catch (error) {
+      debugPrint('Incoming request parse error: $error');
     }
   }
 
-  Future<void> _showNextRequest() async {
-    if (_dialogOpen || _pendingRequests.isEmpty) return;
+  Future<void> _showNextRequestDialog() async {
+    if (!mounted ||
+        _showingRequestDialog ||
+        _pendingRequests.isEmpty) {
+      return;
+    }
 
-    final context = appNavigatorKey.currentContext;
+    _showingRequestDialog = true;
 
-    if (context == null || !context.mounted) return;
+    final request = _pendingRequests.removeAt(0);
+    final requesterId = request['requesterId'] as String;
+    final requesterName = request['requesterName'] as String;
 
-    _dialogOpen = true;
-
-    final request = _pendingRequests.first;
-    final requesterId = request['requesterId']!;
-    final requesterName = request['requesterName']!;
-
-    try {
-      final accepted = await showDialog<bool>(
-        context: context,
-        useRootNavigator: true,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          return AlertDialog(
-            title: const Row(
-              children: [
-                Icon(Icons.bluetooth_connected),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text('সংযোগের অনুরোধ'),
-                ),
-              ],
+    final accepted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('নতুন সংযোগের অনুরোধ'),
+          content: Text(
+            '$requesterName আপনার সঙ্গে সংযুক্ত হতে চায়। '
+            'আপনি কি অনুমতি দেবেন?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(false);
+              },
+              child: const Text('প্রত্যাখ্যান'),
             ),
-            content: Text(
-              '$requesterName আপনার ফোনের সঙ্গে '
-              'সংযুক্ত হতে চায়। আপনি কি অনুমতি দেবেন?',
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: const Text('অনুমতি দিন'),
             ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop(false);
-                },
-                child: const Text('প্রত্যাখ্যান করুন'),
-              ),
-              FilledButton.icon(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop(true);
-                },
-                icon: const Icon(Icons.check),
-                label: const Text('গ্রহণ করুন'),
-              ),
-            ],
+          ],
+        );
+      },
+    );
+
+    if (accepted != null) {
+      try {
+        await _bluetooth.respondToConnectionRequest(
+          accepted,
+          requesterId,
+        );
+      } catch (error) {
+        debugPrint('Connection response error: $error');
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('সংযোগের উত্তর পাঠানো যায়নি: $error'),
+            ),
           );
-        },
-      );
-
-      if (accepted == null) return;
-
-      await _bluetooth.respondToConnectionRequest(
-        accepted: accepted,
-        requesterId: requesterId,
-      );
-
-      final currentContext = appNavigatorKey.currentContext;
-
-      if (currentContext != null && currentContext.mounted) {
-        ScaffoldMessenger.of(currentContext).showSnackBar(
-          SnackBar(
-            content: Text(
-              accepted
-                  ? 'সংযোগের অনুরোধ গ্রহণ করা হয়েছে।'
-                  : 'সংযোগের অনুরোধ প্রত্যাখ্যান করা হয়েছে।',
-            ),
-          ),
-        );
+        }
       }
-    } catch (error) {
-      final currentContext = appNavigatorKey.currentContext;
+    }
 
-      if (currentContext != null && currentContext.mounted) {
-        ScaffoldMessenger.of(currentContext).showSnackBar(
-          SnackBar(
-            content: Text(
-              'অনুরোধের উত্তর পাঠানো যায়নি: $error',
-            ),
-          ),
-        );
-      }
-    } finally {
-      if (_pendingRequests.isNotEmpty &&
-          _pendingRequests.first['requesterId'] == requesterId) {
-        _pendingRequests.removeAt(0);
-      } else {
-        _pendingRequests.removeWhere(
-          (item) => item['requesterId'] == requesterId,
-        );
-      }
+    _showingRequestDialog = false;
 
-      _dialogOpen = false;
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showNextRequest();
-      });
+    if (mounted && _pendingRequests.isNotEmpty) {
+      _showNextRequestDialog();
     }
   }
 
   @override
   void dispose() {
-    _requestSubscription?.cancel();
+    _messageSubscription?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: appNavigatorKey,
       title: 'জরুরি মেসেঞ্জার',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.green,
+        ),
         useMaterial3: true,
-        colorSchemeSeed: Colors.green,
-        brightness: Brightness.light,
       ),
-      home: const ChatScreen(),
-      routes: {
-        '/home': (_) => const ChatScreen(),
-        '/chat': (_) => const ChatScreen(),
-        '/connection': (_) => const ConnectionScreen(),
-      },
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.green,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      home: ChatScreen(bluetoothService: _bluetooth),
     );
   }
 }
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  final BluetoothService bluetoothService;
+
+  const ChatScreen({
+    super.key,
+    required this.bluetoothService,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -219,296 +197,149 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController =
       TextEditingController();
-
   final ScrollController _scrollController = ScrollController();
-
-  final BluetoothService _bluetoothService = BluetoothService();
+  final Uuid _uuid = const Uuid();
 
   final List<Message> _messages = [];
 
-  StreamSubscription<String>? _messageSubscription;
-  StreamSubscription<String>? _connectionSubscription;
+  StreamSubscription<dynamic>? _messageSubscription;
+  StreamSubscription<dynamic>? _connectionSubscription;
 
-  bool _isLoading = true;
-  bool _isSending = false;
-  bool _connectionApproved = false;
+  bool _sending = false;
+
+  BluetoothService get _bluetooth => widget.bluetoothService;
 
   @override
   void initState() {
     super.initState();
 
     _loadMessages();
-    _listenForBluetoothMessages();
-    _listenForConnectionStatus();
-  }
 
-  Future<void> _loadMessages() async {
-    final savedMessages = LocalStorageService.getMessages();
-
-    final chatMessages = savedMessages.where((message) {
-      return message.messageType == 'chat' &&
-          !message.senderName.startsWith('ঘোষণা • ');
-    }).toList();
-
-    if (!mounted) return;
-
-    setState(() {
-      _messages
-        ..clear()
-        ..addAll(chatMessages);
-
-      _isLoading = false;
-    });
-
-    _scrollToBottom();
-  }
-
-  void _listenForBluetoothMessages() {
-    _messageSubscription = _bluetoothService.messageStream.listen(
-      _receiveBluetoothMessage,
+    _messageSubscription = _bluetooth.messageStream.listen(
+      _handleIncomingMessage,
       onError: (Object error) {
-        if (!mounted) return;
+        debugPrint('Chat message stream error: $error');
+      },
+    );
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Bluetooth মেসেজ গ্রহণে সমস্যা: $error',
-            ),
-          ),
-        );
+    _connectionSubscription = _bluetooth.connectionStream.listen(
+      (dynamic event) {
+        if (!mounted) return;
+        setState(() {});
+      },
+      onError: (Object error) {
+        debugPrint('Connection stream error: $error');
       },
     );
   }
 
-  void _listenForConnectionStatus() {
-    _connectionSubscription =
-        _bluetoothService.connectionStream.listen((event) {
-      if (!mounted) return;
-
-      if (event == 'connection_accepted') {
-        setState(() {
-          _connectionApproved = true;
-        });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('সংযোগের অনুরোধ গ্রহণ করা হয়েছে।'),
-          ),
-        );
-      } else if (event == 'connection_rejected' ||
-          event == 'disconnected' ||
-          event == 'server_disconnected' ||
-          event.startsWith('error:')) {
-        setState(() {
-          _connectionApproved = false;
-        });
-      }
-    });
-  }
-
-  Future<void> _receiveBluetoothMessage(
-    String rawMessage,
-  ) async {
-    final text = rawMessage.trim();
-
-    if (text.isEmpty) return;
-
+  Future<void> _loadMessages() async {
     try {
-      final decoded = jsonDecode(text);
-
-      if (decoded is Map) {
-        final data = Map<String, dynamic>.from(decoded);
-
-        if (data['type'] == 'connection_request') return;
-
-        if (data['type'] == 'connection_accepted' ||
-            data['type'] == 'connection_rejected') {
-          return;
-        }
-      }
-    } catch (_) {
-      if (text.startsWith('{') || text.startsWith('[')) {
-        return;
-      }
-    }
-
-    Message? receivedMessage;
-    bool isStructuredMessage = false;
-
-    try {
-      final decoded = jsonDecode(text);
-
-      if (decoded is Map) {
-        final map = Map<String, dynamic>.from(decoded);
-
-        if (map.containsKey('id') &&
-            map.containsKey('senderId') &&
-            map.containsKey('text') &&
-            map.containsKey('createdAt')) {
-          isStructuredMessage = true;
-
-          try {
-            receivedMessage = Message.fromMap(map);
-          } catch (_) {
-            return;
-          }
-        }
-      }
-    } catch (_) {
-      // সাধারণ টেক্সট মেসেজ হিসেবেও গ্রহণ করা হবে।
-    }
-
-    if (isStructuredMessage && receivedMessage == null) {
-      return;
-    }
-
-    receivedMessage ??= Message(
-      id: const Uuid().v4(),
-      senderId: 'bluetooth-peer',
-      senderName: 'Bluetooth ফোন',
-      text: text,
-      createdAt: DateTime.now(),
-      messageType: 'chat',
-    );
-
-    final message = receivedMessage;
-
-    if (message.senderId == DeviceService.deviceId) return;
-
-    if (message.messageType == 'private') {
-      if (message.recipientId == null ||
-          message.recipientId != DeviceService.deviceId) {
-        return;
-      }
-    }
-
-    final savedMessages = LocalStorageService.getMessages();
-
-    final alreadyExists = savedMessages.any(
-      (saved) => saved.id == message.id,
-    );
-
-    if (alreadyExists) return;
-
-    try {
-      await LocalStorageService.saveMessage(message);
+      final storedMessages = await StorageService.getMessages();
 
       if (!mounted) return;
-
-      if (message.messageType != 'chat' ||
-          message.senderName.startsWith('ঘোষণা • ')) {
-        return;
-      }
 
       setState(() {
-        _messages.add(message);
-        _messages.sort(
-          (a, b) => a.createdAt.compareTo(b.createdAt),
-        );
+        _messages
+          ..clear()
+          ..addAll(storedMessages);
       });
 
       _scrollToBottom();
     } catch (error) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('আসা মেসেজ সেভ করা যায়নি: $error'),
-        ),
-      );
+      debugPrint('Load messages error: $error');
     }
   }
 
-  @override
-  void dispose() {
-    _messageSubscription?.cancel();
-    _connectionSubscription?.cancel();
-    _messageController.dispose();
-    _scrollController.dispose();
-    super.dispose();
+  void _handleIncomingMessage(dynamic rawMessage) {
+    if (rawMessage is! String) return;
+
+    try {
+      final decoded = jsonDecode(rawMessage);
+
+      if (decoded is! Map<String, dynamic>) return;
+
+      final type = decoded['type']?.toString();
+
+      if (type == 'connection_request' ||
+          type == 'connection_accepted' ||
+          type == 'connection_rejected') {
+        if (mounted) setState(() {});
+        return;
+      }
+
+      final message = Message.fromMap(decoded);
+
+      if (message.id.isEmpty) return;
+
+      final alreadyExists = _messages.any(
+        (item) => item.id == message.id,
+      );
+
+      if (alreadyExists) return;
+
+      if (!mounted) return;
+
+      setState(() {
+        _messages.add(message);
+      });
+
+      StorageService.saveMessages(_messages);
+      _scrollToBottom();
+    } catch (error) {
+      debugPrint('Incoming chat message error: $error');
+    }
   }
 
   Future<void> _sendMessage() async {
-    if (_isSending) return;
-
     final text = _messageController.text.trim();
 
-    if (text.isEmpty) return;
+    if (text.isEmpty || _sending) return;
 
-    if (!_bluetoothService.isConnected) {
+    if (!_bluetooth.isConnected) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            'আগে অন্য ফোনের সংযোগের অনুরোধ গ্রহণ করাতে হবে।',
-          ),
+          content: Text('আগে অন্তত একটি ডিভাইস সংযুক্ত করুন।'),
         ),
       );
       return;
     }
 
-    setState(() {
-      _isSending = true;
-    });
-
     final message = Message(
-      id: const Uuid().v4(),
-      senderId: DeviceService.deviceId,
-      senderName: DeviceService.deviceName,
+      id: _uuid.v4(),
       text: text,
-      createdAt: DateTime.now(),
-      messageType: 'chat',
+      isSent: true,
+      timestamp: DateTime.now(),
     );
 
-    try {
-      await LocalStorageService.saveMessage(message);
-
-      if (!mounted) return;
-
-      setState(() {
-        _messages.add(message);
-      });
-
+    setState(() {
+      _sending = true;
+      _messages.add(message);
       _messageController.clear();
+    });
+
+    try {
+      await StorageService.saveMessages(_messages);
+
+      await _bluetooth.sendMessage(
+        jsonEncode(message.toMap()),
+      );
+
       _scrollToBottom();
+    } catch (error) {
+      debugPrint('Send message error: $error');
 
-      try {
-        await _bluetoothService.sendMessage(
-          jsonEncode(message.toMap()),
-        );
-      } catch (error) {
-        if (!mounted) return;
-
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text(
-              'মেসেজ ফোনে সেভ হয়েছে, কিন্তু Bluetooth-এ '
-              'পাঠানো যায়নি। সংযোগ পরীক্ষা করুন।',
-            ),
-            action: SnackBarAction(
-              label: 'বিস্তারিত',
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('$error'),
-                  ),
-                );
-              },
-            ),
+            content: Text('বার্তা পাঠানো যায়নি: $error'),
           ),
         );
       }
-    } catch (error) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('মেসেজ সেভ করা যায়নি: $error'),
-        ),
-      );
     } finally {
       if (mounted) {
         setState(() {
-          _isSending = false;
+          _sending = false;
         });
       }
     }
@@ -526,282 +357,203 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  String _shortDeviceId(String id) {
-    if (id.length <= 8) return id;
-    return id.substring(0, 8);
-  }
-
-  void _openConnectionScreen() {
-    Navigator.push(
-      context,
+  Future<void> _openDevices() async {
+    await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => const ConnectionScreen(),
+        builder: (_) => BluetoothDevicesScreen(
+          bluetoothService: _bluetooth,
+        ),
       ),
     );
+
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openConnectionScreen() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ConnectionScreen(
+          bluetoothService: _bluetooth,
+        ),
+      ),
+    );
+
+    if (mounted) setState(() {});
   }
 
   @override
-  Widget build(BuildContext context) {
-    final bluetoothConnected = _bluetoothService.isConnected;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'জরুরি মেসেঞ্জার',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        actions: [
-          TextButton.icon(
-            onPressed: _openConnectionScreen,
-            icon: const Icon(Icons.link),
-            label: const Text('Connection'),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (!bluetoothConnected)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                color: Theme.of(context)
-                    .colorScheme
-                    .surfaceContainerHighest,
-                child: Text(
-                  _connectionApproved
-                      ? 'সংযোগের অবস্থা যাচাই হচ্ছে...'
-                      : 'চ্যাট করতে আগে অনুমোদিত Bluetooth সংযোগ করুন।',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13),
-                ),
-              ),
-            Expanded(
-              child: _isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(),
-                    )
-                  : _messages.isEmpty
-                      ? const _EmptyChatView()
-                      : ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.fromLTRB(
-                            12,
-                            16,
-                            12,
-                            16,
-                          ),
-                          itemCount: _messages.length,
-                          itemBuilder: (context, index) {
-                            final message = _messages[index];
-
-                            final isMine =
-                                message.senderId ==
-                                    DeviceService.deviceId;
-
-                            return _MessageBubble(
-                              message: message,
-                              deviceId: _shortDeviceId(
-                                message.senderId,
-                              ),
-                              isMine: isMine,
-                            );
-                          },
-                        ),
-            ),
-            _MessageInputBar(
-              controller: _messageController,
-              isSending: _isSending,
-              onSend: _sendMessage,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _EmptyChatView extends StatelessWidget {
-  const _EmptyChatView();
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(30),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.forum_outlined,
-              size: 72,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 18),
-            const Text(
-              'কোনো মেসেজ নেই',
-              style: TextStyle(
-                fontSize: 21,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Connection থেকে কাছাকাছি ফোনের '
-              'সাথে সংযোগ করুন।',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 15,
-                height: 1.5,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MessageBubble extends StatelessWidget {
-  final Message message;
-  final String deviceId;
-  final bool isMine;
-
-  const _MessageBubble({
-    required this.message,
-    required this.deviceId,
-    required this.isMine,
-  });
-
-  String _formatTime(DateTime time) {
-    final hour = time.hour.toString().padLeft(2, '0');
-    final minute = time.minute.toString().padLeft(2, '0');
-
-    return '$hour:$minute';
+  void dispose() {
+    _messageSubscription?.cancel();
+    _connectionSubscription?.cancel();
+    _messageController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Align(
-      alignment:
-          isMine ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.78,
-        ),
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 10,
-        ),
-        decoration: BoxDecoration(
-          color: isMine
-              ? theme.colorScheme.primary
-              : theme.colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isMine ? 16 : 4),
-            bottomRight: Radius.circular(isMine ? 4 : 16),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('জরুরি মেসেঞ্জার'),
+        actions: [
+          IconButton(
+            tooltip: 'Bluetooth ডিভাইস',
+            onPressed: _openDevices,
+            icon: const Icon(Icons.devices),
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: isMine
-              ? CrossAxisAlignment.end
-              : CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.text,
-              style: TextStyle(
-                fontSize: 16,
-                height: 1.4,
-                color: isMine
-                    ? theme.colorScheme.onPrimary
-                    : theme.colorScheme.onSurface,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${isMine ? 'আমি' : message.senderName}: '
-              '$deviceId • ${_formatTime(message.createdAt)}',
-              style: TextStyle(
-                fontSize: 10,
-                color: isMine
-                    ? theme.colorScheme.onPrimary
-                        .withValues(alpha: 0.75)
-                    : theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MessageInputBar extends StatelessWidget {
-  final TextEditingController controller;
-  final bool isSending;
-  final VoidCallback onSend;
-
-  const _MessageInputBar({
-    required this.controller,
-    required this.isSending,
-    required this.onSend,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
+          IconButton(
+            tooltip: 'সংযোগ',
+            onPressed: _openConnectionScreen,
+            icon: const Icon(Icons.bluetooth_connected),
           ),
-        ),
+        ],
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      body: Column(
         children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 5,
-              textInputAction: TextInputAction.newline,
-              decoration: InputDecoration(
-                hintText: 'মেসেজ লিখুন...',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 10,
+            ),
+            color: theme.colorScheme.surfaceContainerHighest,
+            child: Row(
+              children: [
+                Icon(
+                  _bluetooth.isConnected
+                      ? Icons.bluetooth_connected
+                      : Icons.bluetooth_disabled,
+                  color: _bluetooth.isConnected
+                      ? Colors.green
+                      : theme.colorScheme.onSurfaceVariant,
                 ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 12,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _bluetooth.isConnected
+                        ? 'ডিভাইস সংযুক্ত: '
+                            '${_bluetooth.connectedDeviceCount}'
+                        : 'কোনো ডিভাইস সংযুক্ত নেই',
+                    style: theme.textTheme.bodyMedium,
+                  ),
                 ),
-              ),
-              onSubmitted: (_) => onSend(),
+                TextButton(
+                  onPressed: _openDevices,
+                  child: const Text('ডিভাইস'),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          IconButton.filled(
-            onPressed: isSending ? null : onSend,
-            icon: isSending
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
+          Expanded(
+            child: _messages.isEmpty
+                ? const Center(
+                    child: Text(
+                      'এখনো কোনো বার্তা নেই।\n'
+                      'ডিভাইস সংযুক্ত করে বার্তা পাঠান।',
+                      textAlign: TextAlign.center,
                     ),
                   )
-                : const Icon(Icons.send),
-            iconSize: 22,
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) {
+                      final message = _messages[index];
+
+                      return Align(
+                        alignment: message.isSent
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: Container(
+                          constraints: BoxConstraints(
+                            maxWidth:
+                                MediaQuery.of(context).size.width * 0.8,
+                          ),
+                          margin: const EdgeInsets.symmetric(
+                            vertical: 4,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: message.isSent
+                                ? theme.colorScheme.primaryContainer
+                                : theme.colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(message.text),
+                              const SizedBox(height: 4),
+                              Text(
+                                _formatTime(message.timestamp),
+                                style: theme.textTheme.labelSmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageController,
+                      minLines: 1,
+                      maxLines: 5,
+                      textInputAction: TextInputAction.newline,
+                      decoration: InputDecoration(
+                        hintText: 'বার্তা লিখুন...',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                      onSubmitted: (_) => _sendMessage(),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    onPressed: _sending ? null : _sendMessage,
+                    tooltip: 'বার্তা পাঠান',
+                    icon: _sending
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(Icons.send),
+                  ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
     );
+  }
+
+  String _formatTime(DateTime time) {
+    final localTime = time.toLocal();
+    final hour = localTime.hour.toString().padLeft(2, '0');
+    final minute = localTime.minute.toString().padLeft(2, '0');
+
+    return '$hour:$minute';
   }
 }
