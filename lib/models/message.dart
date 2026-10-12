@@ -1,4 +1,3 @@
-
 class Message {
   final String id;
   final String senderId;
@@ -26,6 +25,12 @@ class Message {
     this.recipientId,
   });
 
+  // আগের ChatScreen কোডের সঙ্গে সামঞ্জস্য
+  DateTime get timestamp => createdAt;
+
+  // আগের ChatScreen কোডের সঙ্গে সামঞ্জস্য
+  bool get isSent => true;
+
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -42,15 +47,20 @@ class Message {
 
   factory Message.fromMap(Map<String, dynamic> map) {
     return Message(
-      id: map['id'] as String,
-      senderId: map['senderId'] as String,
-      senderName: map['senderName'] as String,
-      text: map['text'] as String,
-      createdAt: DateTime.parse(map['createdAt'] as String),
+      id: map['id']?.toString() ?? '',
+      senderId: map['senderId']?.toString() ?? '',
+      senderName: map['senderName']?.toString() ?? 'অজানা',
+      text: map['text']?.toString() ?? '',
+      createdAt: DateTime.tryParse(
+            map['createdAt']?.toString() ??
+                map['timestamp']?.toString() ??
+                '',
+          ) ??
+          DateTime.now(),
       isEmergency: map['isEmergency'] as bool? ?? false,
       isDelivered: map['isDelivered'] as bool? ?? false,
-      messageType: map['messageType'] as String? ?? 'chat',
-      recipientId: map['recipientId'] as String?,
+      messageType: map['messageType']?.toString() ?? 'chat',
+      recipientId: map['recipientId']?.toString(),
     );
   }
 }
