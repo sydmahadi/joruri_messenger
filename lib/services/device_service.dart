@@ -1,6 +1,6 @@
 import 'package:uuid/uuid.dart';
 
-import 'package:joruri_messenger/services/local_storage_service.dart';
+import 'local_storage_service.dart';
 
 class DeviceService {
   DeviceService._();
@@ -15,36 +15,40 @@ class DeviceService {
 
   static Future<void> initialize() async {
     // Device ID
-    String? savedDeviceId = LocalStorageService.getDeviceId();
+    String? savedDeviceId =
+        LocalStorageService.getDeviceId();
 
-    if (savedDeviceId == null || savedDeviceId.trim().isEmpty) {
+    if (savedDeviceId == null ||
+        savedDeviceId.trim().isEmpty) {
       savedDeviceId = _uuid.v4();
-      await LocalStorageService.saveDeviceId(savedDeviceId);
+      await LocalStorageService.saveDeviceId(
+        savedDeviceId,
+      );
     }
 
     _deviceId = savedDeviceId;
 
     // Device name
-    final String? savedDeviceName =
+    final savedDeviceName =
         LocalStorageService.getDeviceName();
 
     if (savedDeviceName == null ||
         savedDeviceName.trim().isEmpty) {
       _deviceName = 'আমার ফোন';
-      await LocalStorageService.saveDeviceName(_deviceName);
+
+      await LocalStorageService.saveDeviceName(
+        _deviceName,
+      );
     } else {
       _deviceName = savedDeviceName;
     }
 
     // Device location
-    final String? savedLocation =
-        LocalStorageService.getDeviceLocation();
+    _deviceLocation =
+        LocalStorageService.getDeviceLocation() ?? '';
 
-    if (savedLocation == null) {
-      _deviceLocation = '';
+    if (LocalStorageService.getDeviceLocation() == null) {
       await LocalStorageService.saveDeviceLocation('');
-    } else {
-      _deviceLocation = savedLocation;
     }
   }
 
@@ -61,13 +65,11 @@ class DeviceService {
   }
 
   static String get deviceLocation {
-    return _deviceLocation.isNotEmpty
-        ? _deviceLocation
-        : (LocalStorageService.getDeviceLocation() ?? '');
+    return _deviceLocation;
   }
 
   static Future<void> setDeviceName(String value) async {
-    final String name = value.trim();
+    final name = value.trim();
 
     if (name.isEmpty) return;
 
@@ -75,8 +77,10 @@ class DeviceService {
     _deviceName = name;
   }
 
-  static Future<void> setDeviceLocation(String location) async {
-    final String value = location.trim();
+  static Future<void> setDeviceLocation(
+    String location,
+  ) async {
+    final value = location.trim();
 
     await LocalStorageService.saveDeviceLocation(value);
     _deviceLocation = value;
