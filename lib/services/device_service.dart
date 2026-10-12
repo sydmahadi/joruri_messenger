@@ -6,28 +6,28 @@ class DeviceService {
   static const Uuid _uuid = Uuid();
 
   static Future<String> initialize() async {
-    String? deviceId = LocalStorageService.getDeviceId();
+    String? deviceId = StorageService.getDeviceId();
 
     if (deviceId == null || deviceId.isEmpty) {
       deviceId = _uuid.v4();
-      await LocalStorageService.saveDeviceId(deviceId);
+      await StorageService.saveDeviceId(deviceId);
     }
 
-    String? deviceName = LocalStorageService.getDeviceName();
+    String? deviceName = StorageService.getDeviceName();
 
     if (deviceName == null || deviceName.isEmpty) {
-      await LocalStorageService.saveDeviceName('আমার ফোন');
+      await StorageService.saveDeviceName('আমার ফোন');
     }
 
     return deviceId;
   }
 
   static String get deviceId {
-    return LocalStorageService.getDeviceId() ?? '';
+    return StorageService.getDeviceId() ?? '';
   }
 
   static String get deviceName {
-    return LocalStorageService.getDeviceName() ?? 'আমার ফোন';
+    return StorageService.getDeviceName() ?? 'আমার ফোন';
   }
 
   static Future<void> setDeviceName(String name) async {
@@ -37,6 +37,6 @@ class DeviceService {
       return;
     }
 
-    await LocalStorageService.saveDeviceName(trimmedName);
+    await StorageService.saveDeviceName(trimmedName);
   }
 }
