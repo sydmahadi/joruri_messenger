@@ -2,7 +2,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import '../models/message.dart';
 
-class StorageService {
+class LocalStorageService {
   static const String messagesBoxName = 'messages';
   static const String settingsBoxName = 'settings';
 
@@ -47,7 +47,7 @@ class StorageService {
           ),
         );
       } catch (_) {
-        // ভুল বা অসম্পূর্ণ ডেটা থাকলে সেটি এড়িয়ে যাবে।
+        // Skip invalid saved messages.
       }
     }
 
@@ -80,6 +80,16 @@ class StorageService {
 
   static String? getDeviceName() {
     return settingsBox.get('deviceName') as String?;
+  }
+
+  static Future<void> saveDeviceLocation(
+    String location,
+  ) async {
+    await settingsBox.put('deviceLocation', location);
+  }
+
+  static String? getDeviceLocation() {
+    return settingsBox.get('deviceLocation') as String?;
   }
 
   static Future<void> saveSetting(
