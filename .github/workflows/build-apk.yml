@@ -1,3 +1,4 @@
+
 name: Build Joruri Messenger APK
 
 on:
@@ -82,7 +83,7 @@ jobs:
           path.write_text(text)
           PY
 
-      - name: Create native Bluetooth MainActivity
+      - name: Create native Bluetooth server
         run: |
           mkdir -p android/app/src/main/kotlin/com/joruri/joruri_messenger
 
@@ -135,6 +136,7 @@ jobs:
               }
 
               private lateinit var channel: MethodChannel
+
               private var gattServer: BluetoothGattServer? = null
               private var advertiser: BluetoothLeAdvertiser? = null
               private var characteristic: BluetoothGattCharacteristic? = null
@@ -148,14 +150,14 @@ jobs:
               private val connectedDevices =
                   ConcurrentHashMap<String, BluetoothDevice>()
 
-              private val requesterAddresses =
-                  ConcurrentHashMap<String, String>()
-
               private val notificationsEnabled =
                   ConcurrentHashMap<String, Boolean>()
 
               private val approvedAddresses =
                   ConcurrentHashMap<String, Boolean>()
+
+              private val requesterAddresses =
+                  ConcurrentHashMap<String, String>()
 
               override fun configureFlutterEngine(
                   flutterEngine: FlutterEngine
@@ -176,14 +178,14 @@ jobs:
                               } catch (e: Exception) {
                                   result.error(
                                       "BLE_START_FAILED",
-                                      e.message ?: "Unable to start BLE",
+                                      e.message ?: "Unable to start Bluetooth",
                                       null
                                   )
                               }
                           }
 
                           "stopAdvertising" -> {
-                              stopBluetoothAdvertisingOnly()
+                              stopAdvertisingOnly()
                               result.success(true)
                           }
 
@@ -191,8 +193,8 @@ jobs:
                               val message =
                                   call.argument<String>("message")
 
-                              val requesterId =
-                                  call.argument<String>("requesterId")
+                              val targetAddress =
+                                  call.argument<String>("targetAddress")
 
                               if (message.isNullOrEmpty()) {
                                   result.error(
@@ -202,7 +204,7 @@ jobs:
                                   )
                               } else {
                                   result.success(
-                                      sendMessage(message, requesterId)
+                                      sendMessage(message, targetAddress)
                                   )
                               }
                           }
@@ -222,13 +224,15 @@ jobs:
                       PackageManager.PERMISSION_GRANTED
               }
 
-              private fun hasConnectPermission(): Boolean =
-                  Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+              private fun hasConnectPermission(): Boolean {
+                  return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                       hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+              }
 
-              private fun hasAdvertisePermission(): Boolean =
-                  Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+              private fun hasAdvertisePermission(): Boolean {
+                  return Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                       hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
+              }
 
               private fun isBluetoothEnabled(): Boolean {
                   if (!hasConnectPermission()) return false
@@ -269,11 +273,6 @@ jobs:
                       )
                   }
 
-                  /*
-                   * গুরুত্বপূর্ণ:
-                   * সার্ভার আগে থেকেই চালু থাকলে পুনরায় চালু করবে না।
-                   * এতে আগের GATT সংযোগগুলো অকারণে বিচ্ছিন্ন হবে না।
-                   */
                   if (gattServer != null && advertiser != null) {
                       if (serviceReady && !advertising) {
                           startAdvertisingAfterServiceAdded()
@@ -327,7 +326,6 @@ jobs:
 
                   if (gattServer?.addService(service) != true) {
                       stopBluetoothServer()
-
                       throw IllegalStateException(
                           "Bluetooth service যোগ করা যায়নি"
                       )
@@ -381,7 +379,6 @@ jobs:
                           settingsInEffect: AdvertiseSettings?
                       ) {
                           advertising = true
-
                           runOnUiThread {
                               channel.invokeMethod(
                                   "advertisingStarted",
@@ -392,7 +389,6 @@ jobs:
 
                       override fun onStartFailure(errorCode: Int) {
                           advertising = false
-
                           notifyFlutterError(
                               "Advertising failed: $errorCode"
                           )
@@ -463,15 +459,12 @@ jobs:
                           offset: Int,
                           characteristic: BluetoothGattCharacteristic
                       ) {
-                          val value =
-                              characteristic.value ?: byteArrayOf()
-
                           gattServer?.sendResponse(
                               device,
                               requestId,
                               BluetoothGatt.GATT_SUCCESS,
                               offset,
-                              value
+                              characteristic.value ?: byteArrayOf()
                           )
                       }
 
@@ -525,14 +518,29 @@ jobs:
                                           device.address
                                   }
                               }
+
+                              if (json.optString("type") ==
+                                  "connection_accepted"
+                              ) {
+                                  approvedAddresses[device.address] = true
+                              }
+
+                              if (json.optString("type") ==
+                                  "connection_rejected"
+                              ) {
+                                  approvedAddresses[device.address] = false
+                              }
                           } catch (_: Exception) {
-                              // সাধারণ বার্তা।
+                              // Non-JSON payloads are forwarded to Flutter.
                           }
 
                           runOnUiThread {
                               channel.invokeMethod(
                                   "messageReceived",
-                                  message
+                                  mapOf(
+                                      "message" to message,
+                                      "address" to device.address
+                                  )
                               )
                           }
                       }
@@ -567,11 +575,9 @@ jobs:
                           ) {
                               descriptor.value = value
 
-                              val enabled =
-                                  value[0].toInt() != 0
-
                               notificationsEnabled[device.address] =
-                                  enabled
+                                  value[0].toInt() != 0 ||
+                                      value[1].toInt() != 0
 
                               if (responseNeeded) {
                                   gattServer?.sendResponse(
@@ -596,25 +602,15 @@ jobs:
 
               private fun sendMessage(
                   message: String,
-                  requesterId: String? = null
+                  targetAddress: String?
               ): Boolean {
                   if (!hasConnectPermission()) return false
 
                   val server = gattServer ?: return false
-                  val target = characteristic ?: return false
-                  val payload = message.toByteArray(Charsets.UTF_8)
+                  val targetCharacteristic = characteristic ?: return false
 
-                  val targets = if (requesterId != null) {
-                      val address = requesterAddresses[requesterId]
-                      val device = address?.let {
-                          connectedDevices[it]
-                      }
-
-                      if (device == null) {
-                          emptyList()
-                      } else {
-                          listOf(device)
-                      }
+                  val targets = if (targetAddress != null) {
+                      listOfNotNull(connectedDevices[targetAddress])
                   } else {
                       connectedDevices.values.filter { device ->
                           approvedAddresses[device.address] == true &&
@@ -624,59 +620,42 @@ jobs:
 
                   if (targets.isEmpty()) return false
 
+                  val payload = message.toByteArray(Charsets.UTF_8)
                   var successCount = 0
 
                   for (device in targets) {
                       try {
-                          val result =
+                          val success =
                               if (Build.VERSION.SDK_INT >=
                                   Build.VERSION_CODES.TIRAMISU
                               ) {
                                   server.notifyCharacteristicChanged(
                                       device,
-                                      target,
+                                      targetCharacteristic,
                                       false,
                                       payload
                                   ) == BluetoothStatusCodes.SUCCESS
                               } else {
-                                  target.value = payload
+                                  targetCharacteristic.value = payload
 
                                   @Suppress("DEPRECATION")
                                   server.notifyCharacteristicChanged(
                                       device,
-                                      target,
+                                      targetCharacteristic,
                                       false
                                   )
                               }
 
-                          if (result) {
-                              successCount++
-
-                              try {
-                                  val json = JSONObject(message)
-
-                                  when (json.optString("type")) {
-                                      "connection_accepted" -> {
-                                          approvedAddresses[device.address] = true
-                                      }
-
-                                      "connection_rejected" -> {
-                                          approvedAddresses[device.address] = false
-                                      }
-                                  }
-                              } catch (_: Exception) {
-                                  // সাধারণ বার্তা।
-                              }
-                          }
+                          if (success) successCount++
                       } catch (_: Exception) {
-                          // অন্য সংযুক্ত ডিভাইসগুলোতে পাঠানো চালিয়ে যাও।
+                          // Continue sending to other peers.
                       }
                   }
 
                   return successCount > 0
               }
 
-              private fun stopBluetoothAdvertisingOnly() {
+              private fun stopAdvertisingOnly() {
                   try {
                       if (hasConnectPermission() &&
                           hasAdvertisePermission()
@@ -684,7 +663,7 @@ jobs:
                           advertiser?.stopAdvertising(advertiseCallback)
                       }
                   } catch (_: Exception) {
-                      // Ignore stop errors.
+                      // Ignore shutdown errors.
                   }
 
                   advertising = false
@@ -692,7 +671,7 @@ jobs:
 
               @Synchronized
               private fun stopBluetoothServer() {
-                  stopBluetoothAdvertisingOnly()
+                  stopAdvertisingOnly()
 
                   try {
                       if (hasConnectPermission()) {
@@ -708,9 +687,9 @@ jobs:
                   serviceReady = false
 
                   connectedDevices.clear()
-                  requesterAddresses.clear()
                   notificationsEnabled.clear()
                   approvedAddresses.clear()
+                  requesterAddresses.clear()
               }
 
               override fun onDestroy() {
