@@ -18,50 +18,44 @@ class StorageService {
     }
   }
 
-  static Box<Map> get messagesBox {
-    return Hive.box<Map>(messagesBoxName);
-  }
+  static Box<Map> get messagesBox =>
+      Hive.box<Map>(messagesBoxName);
 
-  static Box get settingsBox {
-    return Hive.box(settingsBoxName);
-  }
+  static Box get settingsBox =>
+      Hive.box(settingsBoxName);
 
   static Future<void> saveMessage(Message message) async {
     await messagesBox.put(message.id, message.toMap());
   }
 
-  static Future<void> saveMessages(List<Message> messages) async {
-    final entries = <dynamic, dynamic>{};
-
+  static Future<void> saveMessages(
+    List<Message> messages,
+  ) async {
     for (final message in messages) {
-      entries[message.id] = message.toMap();
-    }
-
-    if (entries.isNotEmpty) {
-      await messagesBox.putAll(entries);
+      await messagesBox.put(message.id, message.toMap());
     }
   }
 
   static List<Message> getMessages() {
-    final messages = <Message>[];
+    final result = <Message>[];
 
     for (final value in messagesBox.values) {
       try {
-        messages.add(
+        result.add(
           Message.fromMap(
             Map<String, dynamic>.from(value),
           ),
         );
-      } catch (error) {
-        // Ignore corrupted message entries.
+      } catch (_) {
+        // ভুল বা অসম্পূর্ণ ডেটা থাকলে সেটি এড়িয়ে যাবে।
       }
     }
 
-    messages.sort(
-      (a, b) => a.timestamp.compareTo(b.timestamp),
+    result.sort(
+      (a, b) => a.createdAt.compareTo(b.createdAt),
     );
 
-    return messages;
+    return result;
   }
 
   static Future<void> deleteMessage(String id) async {
