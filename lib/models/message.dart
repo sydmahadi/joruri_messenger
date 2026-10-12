@@ -1,18 +1,17 @@
+
 class Message {
   final String id;
   final String senderId;
   final String senderName;
+  final String senderLocation;
   final String text;
   final DateTime createdAt;
   final bool isEmergency;
   final bool isDelivered;
   final String messageType;
   final String? recipientId;
-
-  // Mesh forwarding-এর জন্য
   final int hopCount;
   final int maxHops;
-  final DateTime? expiresAt;
 
   const Message({
     required this.id,
@@ -20,54 +19,21 @@ class Message {
     required this.senderName,
     required this.text,
     required this.createdAt,
+    this.senderLocation = '',
     this.isEmergency = false,
     this.isDelivered = false,
     this.messageType = 'chat',
     this.recipientId,
     this.hopCount = 0,
     this.maxHops = 5,
-    this.expiresAt,
   });
-
-  DateTime get timestamp => createdAt;
-
-  // প্রকৃতপক্ষে নিজের পাঠানো কি না, তা ChatScreen-এ
-  // DeviceService.deviceId-এর সঙ্গে senderId মিলিয়ে নির্ধারণ করবে।
-  bool get isSent => true;
-
-  bool get canForward {
-    if (hopCount >= maxHops) return false;
-
-    final expiry = expiresAt;
-    if (expiry != null && DateTime.now().isAfter(expiry)) {
-      return false;
-    }
-
-    return true;
-  }
-
-  Message forwarded() {
-    return Message(
-      id: id,
-      senderId: senderId,
-      senderName: senderName,
-      text: text,
-      createdAt: createdAt,
-      isEmergency: isEmergency,
-      isDelivered: isDelivered,
-      messageType: messageType,
-      recipientId: recipientId,
-      hopCount: hopCount + 1,
-      maxHops: maxHops,
-      expiresAt: expiresAt,
-    );
-  }
 
   Map<String, dynamic> toMap() {
     return {
       'id': id,
       'senderId': senderId,
       'senderName': senderName,
+      'senderLocation': senderLocation,
       'text': text,
       'createdAt': createdAt.toIso8601String(),
       'isEmergency': isEmergency,
@@ -76,7 +42,6 @@ class Message {
       'recipientId': recipientId,
       'hopCount': hopCount,
       'maxHops': maxHops,
-      'expiresAt': expiresAt?.toIso8601String(),
     };
   }
 
@@ -84,23 +49,39 @@ class Message {
     return Message(
       id: map['id']?.toString() ?? '',
       senderId: map['senderId']?.toString() ?? '',
-      senderName: map['senderName']?.toString() ?? 'অজানা',
+      senderName: map['senderName']?.toString() ?? 'অজানা ব্যবহারকারী',
+      senderLocation: map['senderLocation']?.toString() ?? '',
       text: map['text']?.toString() ?? '',
       createdAt: DateTime.tryParse(
-            map['createdAt']?.toString() ??
-                map['timestamp']?.toString() ??
-                '',
+            map['createdAt']?.toString() ?? '',
           ) ??
           DateTime.now(),
-      isEmergency: map['isEmergency'] as bool? ?? false,
-      isDelivered: map['isDelivered'] as bool? ?? false,
+      isEmergency: map['isEmergency'] == true,
+      isDelivered: map['isDelivered'] == true,
       messageType: map['messageType']?.toString() ?? 'chat',
       recipientId: map['recipientId']?.toString(),
-      hopCount: (map['hopCount'] as num?)?.toInt() ?? 0,
-      maxHops: (map['maxHops'] as num?)?.toInt() ?? 5,
-      expiresAt: DateTime.tryParse(
-        map['expiresAt']?.toString() ?? '',
-      ),
+      hopCount: int.tryParse(map['hopCount']?.toString() ?? '') ?? 0,
+      maxHops: int.tryParse(map['maxHops']?.toString() ?? '') ?? 5,
+    );
+  }
+
+  Message copyWith({
+    int? hopCount,
+    bool? isDelivered,
+  }) {
+    return Message(
+      id: id,
+      senderId: senderId,
+      senderName: senderName,
+      senderLocation: senderLocation,
+      text: text,
+      createdAt: createdAt,
+      isEmergency: isEmergency,
+      isDelivered: isDelivered ?? this.isDelivered,
+      messageType: messageType,
+      recipientId: recipientId,
+      hopCount: hopCount ?? this.hopCount,
+      maxHops: maxHops,
     );
   }
 }
