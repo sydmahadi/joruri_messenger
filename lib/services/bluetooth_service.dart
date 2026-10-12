@@ -37,22 +37,26 @@ class BluetoothService {
   final Map<String, bool> _approvedDevices = {};
   final Map<String, String> _requesterIdsByAddress = {};
 
-  final Map<String, StreamSubscription<List<int>>> _notificationSubscriptions = {};
+  final Map<String, StreamSubscription<List<int>>>
+      _notificationSubscriptions = {};
+
   final Map<String, StreamSubscription<BluetoothConnectionState>>
       _stateSubscriptions = {};
+
+  final Set<String> _approvedServerAddresses = {};
+  final Map<String, String> _serverRequesterIdsByAddress = {};
 
   StreamSubscription<List<ScanResult>>? _scanSubscription;
 
   bool _advertising = false;
   bool _disposed = false;
   bool _sending = false;
+  bool _initialized = false;
 
   String? _pendingRequesterId;
   String? _serverConnectedAddress;
-  bool _serverConnectionApproved = false;
 
-  Stream<List<ScanResult>> get devicesStream =>
-      _devicesController.stream;
+  Stream<List<ScanResult>> get devicesStream => _devicesController.stream;
 
   Stream<String> get messageStream => _messagesController.stream;
 
@@ -62,14 +66,21 @@ class BluetoothService {
 
   bool get isConnected =>
       _approvedDevices.values.any((approved) => approved) ||
-      (_serverConnectedAddress != null && _serverConnectionApproved);
+      _approvedServerAddresses.isNotEmpty;
 
   int get connectedDeviceCount =>
       _approvedDevices.values.where((approved) => approved).length +
-      (_serverConnectionApproved ? 1 : 0);
+      _approvedServerAddresses.length;
 
   List<String> get connectedDeviceAddresses =>
       List.unmodifiable(_approvedDevices.keys);
+
+  Future<void> initialize() async {
+    if (_disposed || _initialized) return;
+
+    _nativeChannel.setMethodCallHandler(_handleNativeMethod);
+    _initialized = true;
+  }
 
   Future<bool> requestPermissions() async {
     try {
@@ -105,17 +116,31 @@ class BluetoothService {
         break;
 
       case 'deviceConnected':
-        _serverConnectedAddress = call.arguments?.toString();
-        _serverConnectionApproved = false;
-        _connectionController.add(
-          'server_pending:${_serverConnectedAddress ?? ''}',
-        );
+        final address = call.arguments?.toString() ?? '';
+        if (address.isNotEmpty) {
+          _serverConnectedAddress = address;
+          _serverRequesterIdsByAddress.putIfAbsent(address, () => '');
+          _connectionController.add('server_pending:$address');
+        }
         break;
 
       case 'deviceDisconnected':
-        _serverConnectedAddress = null;
-        _serverConnectionApproved = false;
-        _connectionController.add('server_disconnected');
+        final address = call.arguments?.toString() ?? '';
+
+        if (address.isNotEmpty) {
+          _approvedServerAddresses.remove(address);
+          _serverRequesterIdsByAddress.remove(address);
+          _connectionController.add('server_disconnected:$address');
+        } else {
+          _approvedServerAddresses.clear();
+          _serverRequesterIdsByAddress.clear();
+          _connectionController.add('server_disconnected');
+        }
+
+        _serverConnectedAddress =
+            _serverRequesterIdsByAddress.keys.isEmpty
+                ? null
+                : _serverRequesterIdsByAddress.keys.last;
         break;
 
       case 'advertisingStarted':
@@ -137,8 +162,19 @@ class BluetoothService {
         final type = decoded['type']?.toString();
 
         if (type == 'connection_request') {
-          _pendingRequesterId = decoded['senderId']?.toString();
-          _messagesController.add(raw);
+          final requesterId = decoded['senderId']?.toString() ?? '';
+          final senderAddress = decoded['senderAddress']?.toString();
+
+          _pendingRequesterId = requesterId;
+
+          if (senderAddress != null && senderAddress.isNotEmpty) {
+            _serverRequesterIdsByAddress[senderAddress] = requesterId;
+          }
+
+          if (!_messagesController.isClosed) {
+            _messagesController.add(raw);
+          }
+
           _connectionController.add('connection_request_received');
           return;
         }
@@ -150,7 +186,6 @@ class BluetoothService {
             if (requesterId == null || entry.value == requesterId) {
               _approvedDevices[entry.key] = true;
               _connectionController.add('connection_accepted');
-              break;
             }
           }
           return;
@@ -163,7 +198,6 @@ class BluetoothService {
             if (requesterId == null || entry.value == requesterId) {
               _approvedDevices[entry.key] = false;
               _connectionController.add('connection_rejected');
-              break;
             }
           }
           return;
@@ -181,16 +215,14 @@ class BluetoothService {
   Future<void> startAdvertising() async {
     if (_disposed) return;
 
+    await initialize();
+
     final permitted = await requestPermissions();
 
     if (!permitted) {
-      _connectionController.add(
-        'error:Bluetooth permission denied',
-      );
+      _connectionController.add('error:Bluetooth permission denied');
       return;
     }
-
-    _nativeChannel.setMethodCallHandler(_handleNativeMethod);
 
     try {
       await _nativeChannel.invokeMethod<bool>('startAdvertising');
@@ -215,22 +247,22 @@ class BluetoothService {
     final permitted = await requestPermissions();
 
     if (!permitted) {
-      _connectionController.add(
-        'error:Bluetooth permission denied',
-      );
+      _connectionController.add('error:Bluetooth permission denied');
       return;
     }
 
     await stopScan();
     _devices.clear();
-    _devicesController.add(List.unmodifiable(_devices));
+
+    if (!_devicesController.isClosed) {
+      _devicesController.add(List.unmodifiable(_devices));
+    }
 
     try {
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
         for (final result in results) {
           final index = _devices.indexWhere(
-            (item) =>
-                item.device.remoteId == result.device.remoteId,
+            (item) => item.device.remoteId == result.device.remoteId,
           );
 
           if (index >= 0) {
@@ -292,8 +324,9 @@ class BluetoothService {
         await device.requestMtu(512);
       } catch (_) {}
 
-      _stateSubscriptions[address] =
-          device.connectionState.listen((state) {
+      await _stateSubscriptions.remove(address)?.cancel();
+
+      _stateSubscriptions[address] = device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) {
           _removeDevice(address, disconnectDevice: false);
           _connectionController.add('disconnected:$address');
@@ -313,6 +346,7 @@ class BluetoothService {
             }
           }
         }
+
         if (found != null) break;
       }
 
@@ -322,14 +356,15 @@ class BluetoothService {
 
       _characteristics[address] = found;
 
-      _notificationSubscriptions[address] =
-          found.onValueReceived.listen((value) {
-        if (value.isNotEmpty) {
-          _handleIncomingRaw(
-            utf8.decode(value, allowMalformed: true),
-          );
-        }
-      });
+      await _notificationSubscriptions.remove(address)?.cancel();
+
+      _notificationSubscriptions[address] = found.onValueReceived.listen(
+        (value) {
+          if (value.isNotEmpty) {
+            _handleIncomingRaw(utf8.decode(value, allowMalformed: true));
+          }
+        },
+      );
 
       await found.setNotifyValue(true);
 
@@ -375,15 +410,6 @@ class BluetoothService {
     required bool accepted,
     required String requesterId,
   }) async {
-    if (_serverConnectedAddress == null) {
-      throw Exception('অনুরোধকারী ফোনের Bluetooth সংযোগ পাওয়া যায়নি।');
-    }
-
-    if (_pendingRequesterId != null &&
-        _pendingRequesterId != requesterId) {
-      throw Exception('এই অনুরোধটি আর সক্রিয় নেই।');
-    }
-
     final response = jsonEncode({
       'type': accepted ? 'connection_accepted' : 'connection_rejected',
       'requesterId': requesterId,
@@ -402,8 +428,24 @@ class BluetoothService {
       throw Exception('উত্তর পাঠানো যায়নি। আবার চেষ্টা করুন।');
     }
 
-    _serverConnectionApproved = accepted;
-    _pendingRequesterId = null;
+    if (accepted) {
+      final address = _serverRequesterIdsByAddress.entries
+          .where((entry) => entry.value == requesterId)
+          .map((entry) => entry.key)
+          .firstOrNull;
+
+      if (address != null) {
+        _approvedServerAddresses.add(address);
+      }
+    } else {
+      _approvedServerAddresses.removeWhere(
+        (address) => _serverRequesterIdsByAddress[address] == requesterId,
+      );
+    }
+
+    if (_pendingRequesterId == requesterId) {
+      _pendingRequesterId = null;
+    }
 
     _connectionController.add(
       accepted ? 'connection_accepted' : 'connection_rejected',
@@ -444,9 +486,7 @@ class BluetoothService {
         .map((entry) => entry.key)
         .toList();
 
-    if (outgoing.isEmpty &&
-        !(_serverConnectedAddress != null &&
-            _serverConnectionApproved)) {
+    if (outgoing.isEmpty && _approvedServerAddresses.isEmpty) {
       throw Exception('কোনো অনুমোদিত Bluetooth সংযোগ নেই।');
     }
 
@@ -459,19 +499,23 @@ class BluetoothService {
         try {
           await _writeToDevice(address, message);
           sentCount++;
-        } catch (_) {
+        } catch (error) {
+          debugPrint('Send to $address failed: $error');
           _approvedDevices[address] = false;
         }
       }
 
-      if (_serverConnectedAddress != null &&
-          _serverConnectionApproved) {
-        final sent = await _nativeChannel.invokeMethod<bool>(
-          'sendMessage',
-          {'message': message},
-        );
+      if (_approvedServerAddresses.isNotEmpty) {
+        try {
+          final sent = await _nativeChannel.invokeMethod<bool>(
+            'sendMessage',
+            {'message': message},
+          );
 
-        if (sent == true) sentCount++;
+          if (sent == true) sentCount++;
+        } catch (error) {
+          debugPrint('Native broadcast failed: $error');
+        }
       }
 
       if (sentCount == 0) {
@@ -514,8 +558,9 @@ class BluetoothService {
       await _removeDevice(address, disconnectDevice: true);
     }
 
+    _approvedServerAddresses.clear();
+    _serverRequesterIdsByAddress.clear();
     _serverConnectedAddress = null;
-    _serverConnectionApproved = false;
     _pendingRequesterId = null;
 
     _connectionController.add('disconnected');
