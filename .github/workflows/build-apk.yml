@@ -116,6 +116,7 @@ jobs:
           import java.util.concurrent.ConcurrentHashMap
 
           class MainActivity : FlutterActivity() {
+
               companion object {
                   private const val CHANNEL =
                       "joruri_messenger/bluetooth"
@@ -137,7 +138,11 @@ jobs:
               private var gattServer: BluetoothGattServer? = null
               private var advertiser: BluetoothLeAdvertiser? = null
               private var characteristic: BluetoothGattCharacteristic? = null
+
+              @Volatile
               private var serviceReady = false
+
+              @Volatile
               private var advertising = false
 
               private val connectedDevices =
@@ -178,13 +183,14 @@ jobs:
                           }
 
                           "stopAdvertising" -> {
-                              stopBluetoothServer()
+                              stopBluetoothAdvertisingOnly()
                               result.success(true)
                           }
 
                           "sendMessage" -> {
                               val message =
                                   call.argument<String>("message")
+
                               val requesterId =
                                   call.argument<String>("requesterId")
 
@@ -201,8 +207,9 @@ jobs:
                               }
                           }
 
-                          "getBluetoothState" ->
+                          "getBluetoothState" -> {
                               result.success(isBluetoothEnabled())
+                          }
 
                           else -> result.notImplemented()
                       }
@@ -230,12 +237,14 @@ jobs:
                       val manager = getSystemService(
                           Context.BLUETOOTH_SERVICE
                       ) as BluetoothManager
+
                       manager.adapter?.isEnabled == true
                   } catch (_: Exception) {
                       false
                   }
               }
 
+              @Synchronized
               private fun startBluetoothServer() {
                   if (!hasConnectPermission() ||
                       !hasAdvertisePermission()
@@ -258,6 +267,18 @@ jobs:
                       throw IllegalStateException(
                           "প্রথমে ফোনের Bluetooth চালু করুন"
                       )
+                  }
+
+                  /*
+                   * গুরুত্বপূর্ণ:
+                   * সার্ভার আগে থেকেই চালু থাকলে পুনরায় চালু করবে না।
+                   * এতে আগের GATT সংযোগগুলো অকারণে বিচ্ছিন্ন হবে না।
+                   */
+                  if (gattServer != null && advertiser != null) {
+                      if (serviceReady && !advertising) {
+                          startAdvertisingAfterServiceAdded()
+                      }
+                      return
                   }
 
                   val bleAdvertiser = adapter.bluetoothLeAdvertiser
@@ -306,12 +327,14 @@ jobs:
 
                   if (gattServer?.addService(service) != true) {
                       stopBluetoothServer()
+
                       throw IllegalStateException(
                           "Bluetooth service যোগ করা যায়নি"
                       )
                   }
               }
 
+              @Synchronized
               private fun startAdvertisingAfterServiceAdded() {
                   if (advertising || !serviceReady) return
 
@@ -369,6 +392,7 @@ jobs:
 
                       override fun onStartFailure(errorCode: Int) {
                           advertising = false
+
                           notifyFlutterError(
                               "Advertising failed: $errorCode"
                           )
@@ -377,6 +401,7 @@ jobs:
 
               private val gattCallback =
                   object : BluetoothGattServerCallback() {
+
                       override fun onServiceAdded(
                           status: Int,
                           service: BluetoothGattService
@@ -404,7 +429,7 @@ jobs:
                               BluetoothProfile.STATE_CONNECTED
                           ) {
                               connectedDevices[address] = device
-                              approvedAddresses[address] = false
+                              approvedAddresses.putIfAbsent(address, false)
 
                               runOnUiThread {
                                   channel.invokeMethod(
@@ -500,7 +525,9 @@ jobs:
                                           device.address
                                   }
                               }
-                          } catch (_: Exception) {}
+                          } catch (_: Exception) {
+                              // সাধারণ বার্তা।
+                          }
 
                           runOnUiThread {
                               channel.invokeMethod(
@@ -534,11 +561,13 @@ jobs:
                           offset: Int,
                           value: ByteArray
                       ) {
-                          if (descriptor.uuid == CCCD_UUID && offset == 0) {
+                          if (descriptor.uuid == CCCD_UUID &&
+                              offset == 0 &&
+                              value.size >= 2
+                          ) {
                               descriptor.value = value
 
                               val enabled =
-                                  value.size >= 2 &&
                                   value[0].toInt() != 0
 
                               notificationsEnabled[device.address] =
@@ -625,42 +654,58 @@ jobs:
 
                               try {
                                   val json = JSONObject(message)
-                                  val type = json.optString("type")
 
-                                  if (type == "connection_accepted") {
-                                      approvedAddresses[device.address] = true
-                                  } else if (type ==
-                                      "connection_rejected"
-                                  ) {
-                                      approvedAddresses[device.address] = false
+                                  when (json.optString("type")) {
+                                      "connection_accepted" -> {
+                                          approvedAddresses[device.address] = true
+                                      }
+
+                                      "connection_rejected" -> {
+                                          approvedAddresses[device.address] = false
+                                      }
                                   }
-                              } catch (_: Exception) {}
+                              } catch (_: Exception) {
+                                  // সাধারণ বার্তা।
+                              }
                           }
-                      } catch (_: Exception) {}
+                      } catch (_: Exception) {
+                          // অন্য সংযুক্ত ডিভাইসগুলোতে পাঠানো চালিয়ে যাও।
+                      }
                   }
 
                   return successCount > 0
               }
 
-              private fun stopBluetoothServer() {
+              private fun stopBluetoothAdvertisingOnly() {
                   try {
                       if (hasConnectPermission() &&
                           hasAdvertisePermission()
                       ) {
                           advertiser?.stopAdvertising(advertiseCallback)
                       }
-                  } catch (_: Exception) {}
+                  } catch (_: Exception) {
+                      // Ignore stop errors.
+                  }
 
-                  advertiser = null
                   advertising = false
-                  serviceReady = false
+              }
+
+              @Synchronized
+              private fun stopBluetoothServer() {
+                  stopBluetoothAdvertisingOnly()
 
                   try {
-                      gattServer?.close()
-                  } catch (_: Exception) {}
+                      if (hasConnectPermission()) {
+                          gattServer?.close()
+                      }
+                  } catch (_: Exception) {
+                      // Ignore close errors.
+                  }
 
+                  advertiser = null
                   gattServer = null
                   characteristic = null
+                  serviceReady = false
 
                   connectedDevices.clear()
                   requesterAddresses.clear()
