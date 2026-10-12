@@ -8,17 +8,23 @@ import 'models/message.dart';
 import 'screens/bluetooth_devices_screen.dart';
 import 'screens/connection_screen.dart';
 import 'services/bluetooth_service.dart';
-import 'services/storage_service.dart';
+import 'services/device_service.dart';
+import 'services/local_storage_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await StorageService.init();
+  await LocalStorageService.init();
+  await DeviceService.initialize();
 
   final bluetoothService = BluetoothService();
   await bluetoothService.initialize();
 
-  runApp(JoruriMessengerApp(bluetoothService: bluetoothService));
+  runApp(
+    JoruriMessengerApp(
+      bluetoothService: bluetoothService,
+    ),
+  );
 }
 
 class JoruriMessengerApp extends StatefulWidget {
@@ -30,11 +36,14 @@ class JoruriMessengerApp extends StatefulWidget {
   });
 
   @override
-  State<JoruriMessengerApp> createState() => _JoruriMessengerAppState();
+  State<JoruriMessengerApp> createState() =>
+      _JoruriMessengerAppState();
 }
 
-class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
-  final List<Map<String, dynamic>> _pendingRequests = [];
+class _JoruriMessengerAppState
+    extends State<JoruriMessengerApp> {
+  final List<Map<String, String>> _pendingRequests = [];
+
   StreamSubscription<dynamic>? _messageSubscription;
   bool _showingRequestDialog = false;
 
@@ -58,22 +67,23 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
     try {
       final decoded = jsonDecode(rawMessage);
 
-      if (decoded is! Map<String, dynamic>) return;
+      if (decoded is! Map) return;
       if (decoded['type'] != 'connection_request') return;
 
-      final requesterId = decoded['requesterId']?.toString() ?? '';
+      final requesterId =
+          decoded['requesterId']?.toString() ?? '';
+
+      final name = decoded['requesterName']?.toString().trim();
       final requesterName =
-          decoded['requesterName']?.toString().trim().isNotEmpty == true
-              ? decoded['requesterName'].toString()
-              : 'অজানা ডিভাইস';
+          name == null || name.isEmpty ? 'অজানা ডিভাইস' : name;
 
       if (requesterId.isEmpty) return;
 
-      final alreadyQueued = _pendingRequests.any(
+      if (_pendingRequests.any(
         (request) => request['requesterId'] == requesterId,
-      );
-
-      if (alreadyQueued) return;
+      )) {
+        return;
+      }
 
       _pendingRequests.add({
         'requesterId': requesterId,
@@ -82,7 +92,7 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
 
       _showNextRequestDialog();
     } catch (error) {
-      debugPrint('Incoming request parse error: $error');
+      debugPrint('Connection request parsing error: $error');
     }
   }
 
@@ -96,8 +106,8 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
     _showingRequestDialog = true;
 
     final request = _pendingRequests.removeAt(0);
-    final requesterId = request['requesterId'] as String;
-    final requesterName = request['requesterName'] as String;
+    final requesterId = request['requesterId']!;
+    final requesterName = request['requesterName']!;
 
     final accepted = await showDialog<bool>(
       context: context,
@@ -111,15 +121,13 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
           ),
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop(false);
-              },
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(false),
               child: const Text('প্রত্যাখ্যান'),
             ),
             FilledButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop(true);
-              },
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(true),
               child: const Text('অনুমতি দিন'),
             ),
           ],
@@ -130,8 +138,8 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
     if (accepted != null) {
       try {
         await _bluetooth.respondToConnectionRequest(
-          accepted,
-          requesterId,
+          accepted: accepted,
+          requesterId: requesterId,
         );
       } catch (error) {
         debugPrint('Connection response error: $error');
@@ -177,7 +185,9 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
         ),
         useMaterial3: true,
       ),
-      home: ChatScreen(bluetoothService: _bluetooth),
+      home: ChatScreen(
+        bluetoothService: _bluetooth,
+      ),
     );
   }
 }
@@ -197,6 +207,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController =
       TextEditingController();
+
   final ScrollController _scrollController = ScrollController();
   final Uuid _uuid = const Uuid();
 
@@ -218,14 +229,13 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageSubscription = _bluetooth.messageStream.listen(
       _handleIncomingMessage,
       onError: (Object error) {
-        debugPrint('Chat message stream error: $error');
+        debugPrint('Chat stream error: $error');
       },
     );
 
     _connectionSubscription = _bluetooth.connectionStream.listen(
       (dynamic event) {
-        if (!mounted) return;
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onError: (Object error) {
         debugPrint('Connection stream error: $error');
@@ -235,14 +245,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadMessages() async {
     try {
-      final storedMessages = await StorageService.getMessages();
+      final savedMessages = LocalStorageService.getMessages();
 
       if (!mounted) return;
 
       setState(() {
         _messages
           ..clear()
-          ..addAll(storedMessages);
+          ..addAll(savedMessages);
       });
 
       _scrollToBottom();
@@ -257,26 +267,25 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final decoded = jsonDecode(rawMessage);
 
-      if (decoded is! Map<String, dynamic>) return;
+      if (decoded is! Map) return;
 
       final type = decoded['type']?.toString();
 
       if (type == 'connection_request' ||
           type == 'connection_accepted' ||
           type == 'connection_rejected') {
-        if (mounted) setState(() {});
         return;
       }
 
-      final message = Message.fromMap(decoded);
+      final message = Message.fromMap(
+        Map<String, dynamic>.from(decoded),
+      );
 
       if (message.id.isEmpty) return;
 
-      final alreadyExists = _messages.any(
-        (item) => item.id == message.id,
-      );
-
-      if (alreadyExists) return;
+      if (_messages.any((item) => item.id == message.id)) {
+        return;
+      }
 
       if (!mounted) return;
 
@@ -284,10 +293,10 @@ class _ChatScreenState extends State<ChatScreen> {
         _messages.add(message);
       });
 
-      StorageService.saveMessages(_messages);
+      LocalStorageService.saveMessage(message);
       _scrollToBottom();
     } catch (error) {
-      debugPrint('Incoming chat message error: $error');
+      debugPrint('Incoming message error: $error');
     }
   }
 
@@ -307,9 +316,12 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final message = Message(
       id: _uuid.v4(),
+      senderId: DeviceService.deviceId,
+      senderName: DeviceService.deviceName,
+      senderLocation: DeviceService.deviceLocation,
       text: text,
-      isSent: true,
-      timestamp: DateTime.now(),
+      createdAt: DateTime.now(),
+      messageType: 'chat',
     );
 
     setState(() {
@@ -319,7 +331,7 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     try {
-      await StorageService.saveMessages(_messages);
+      await LocalStorageService.saveMessage(message);
 
       await _bluetooth.sendMessage(
         jsonEncode(message.toMap()),
@@ -360,9 +372,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _openDevices() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => BluetoothDevicesScreen(
-          bluetoothService: _bluetooth,
-        ),
+        builder: (_) => const BluetoothDevicesScreen(),
       ),
     );
 
@@ -372,9 +382,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _openConnectionScreen() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ConnectionScreen(
-          bluetoothService: _bluetooth,
-        ),
+        builder: (_) => const ConnectionScreen(),
       ),
     );
 
@@ -433,10 +441,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 Expanded(
                   child: Text(
                     _bluetooth.isConnected
-                        ? 'ডিভাইস সংযুক্ত: '
+                        ? 'সংযুক্ত ডিভাইস: '
                             '${_bluetooth.connectedDeviceCount}'
                         : 'কোনো ডিভাইস সংযুক্ত নেই',
-                    style: theme.textTheme.bodyMedium,
                   ),
                 ),
                 TextButton(
@@ -451,7 +458,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? const Center(
                     child: Text(
                       'এখনো কোনো বার্তা নেই।\n'
-                      'ডিভাইস সংযুক্ত করে বার্তা পাঠান।',
+                      'Bluetooth ডিভাইস সংযুক্ত করে বার্তা পাঠান।',
                       textAlign: TextAlign.center,
                     ),
                   )
@@ -461,25 +468,24 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemCount: _messages.length,
                     itemBuilder: (context, index) {
                       final message = _messages[index];
+                      final isMine =
+                          message.senderId == DeviceService.deviceId;
 
                       return Align(
-                        alignment: message.isSent
+                        alignment: isMine
                             ? Alignment.centerRight
                             : Alignment.centerLeft,
                         child: Container(
                           constraints: BoxConstraints(
                             maxWidth:
-                                MediaQuery.of(context).size.width * 0.8,
+                                MediaQuery.of(context).size.width * 0.82,
                           ),
                           margin: const EdgeInsets.symmetric(
                             vertical: 4,
                           ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 10,
-                          ),
+                          padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: message.isSent
+                            color: isMine
                                 ? theme.colorScheme.primaryContainer
                                 : theme.colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(16),
@@ -487,11 +493,26 @@ class _ChatScreenState extends State<ChatScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              if (!isMine) ...[
+                                Text(
+                                  message.senderName,
+                                  style: theme.textTheme.labelLarge,
+                                ),
+                                if (message.senderLocation.isNotEmpty)
+                                  Text(
+                                    message.senderLocation,
+                                    style: theme.textTheme.labelSmall,
+                                  ),
+                                const SizedBox(height: 4),
+                              ],
                               Text(message.text),
                               const SizedBox(height: 4),
-                              Text(
-                                _formatTime(message.timestamp),
-                                style: theme.textTheme.labelSmall,
+                              Align(
+                                alignment: Alignment.bottomRight,
+                                child: Text(
+                                  _formatTime(message.createdAt),
+                                  style: theme.textTheme.labelSmall,
+                                ),
                               ),
                             ],
                           ),
@@ -512,7 +533,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       controller: _messageController,
                       minLines: 1,
                       maxLines: 5,
-                      textInputAction: TextInputAction.newline,
                       decoration: InputDecoration(
                         hintText: 'বার্তা লিখুন...',
                         border: OutlineInputBorder(
@@ -523,7 +543,6 @@ class _ChatScreenState extends State<ChatScreen> {
                           vertical: 12,
                         ),
                       ),
-                      onSubmitted: (_) => _sendMessage(),
                     ),
                   ),
                   const SizedBox(width: 8),
