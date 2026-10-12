@@ -40,11 +40,10 @@ class JoruriMessengerApp extends StatefulWidget {
       _JoruriMessengerAppState();
 }
 
-class _JoruriMessengerAppState
-    extends State<JoruriMessengerApp> {
+class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
   final List<Map<String, String>> _pendingRequests = [];
 
-  StreamSubscription<dynamic>? _messageSubscription;
+  StreamSubscription<String>? _messageSubscription;
   bool _showingRequestDialog = false;
 
   BluetoothService get _bluetooth => widget.bluetoothService;
@@ -61,29 +60,35 @@ class _JoruriMessengerAppState
     );
   }
 
-  void _handleIncomingMessage(dynamic rawMessage) {
-    if (rawMessage is! String) return;
-
+  void _handleIncomingMessage(String rawMessage) {
     try {
       final decoded = jsonDecode(rawMessage);
 
       if (decoded is! Map) return;
-      if (decoded['type'] != 'connection_request') return;
 
-      final requesterId =
-          decoded['requesterId']?.toString() ?? '';
+      if (decoded['type']?.toString() != 'connection_request') {
+        return;
+      }
 
-      final name = decoded['requesterName']?.toString().trim();
+      // BluetoothService sends senderId and senderName.
+      final requesterId = decoded['senderId']?.toString() ?? '';
+
+      final name = decoded['senderName']?.toString().trim();
       final requesterName =
-          name == null || name.isEmpty ? 'অজানা ডিভাইস' : name;
+          (name == null || name.isEmpty) ? 'অজানা ডিভাইস' : name;
 
-      if (requesterId.isEmpty) return;
+      if (requesterId.isEmpty) {
+        debugPrint('Connection request এ senderId নেই: $rawMessage');
+        return;
+      }
 
       if (_pendingRequests.any(
         (request) => request['requesterId'] == requesterId,
       )) {
         return;
       }
+
+      if (!mounted) return;
 
       _pendingRequests.add({
         'requesterId': requesterId,
@@ -109,55 +114,71 @@ class _JoruriMessengerAppState
     final requesterId = request['requesterId']!;
     final requesterName = request['requesterName']!;
 
-    final accepted = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('নতুন সংযোগের অনুরোধ'),
-          content: Text(
-            '$requesterName আপনার সঙ্গে সংযুক্ত হতে চায়। '
-            'আপনি কি অনুমতি দেবেন?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(false),
-              child: const Text('প্রত্যাখ্যান'),
-            ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(true),
-              child: const Text('অনুমতি দিন'),
-            ),
-          ],
-        );
-      },
-    );
+    bool? accepted;
 
-    if (accepted != null) {
-      try {
+    try {
+      accepted = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('নতুন সংযোগের অনুরোধ'),
+            content: Text(
+              '$requesterName আপনার সঙ্গে সংযুক্ত হতে চায়। '
+              'আপনি কি অনুমতি দেবেন?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(false);
+                },
+                child: const Text('প্রত্যাখ্যান'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(true);
+                },
+                child: const Text('অনুমতি দিন'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (accepted != null) {
         await _bluetooth.respondToConnectionRequest(
           accepted: accepted,
           requesterId: requesterId,
         );
-      } catch (error) {
-        debugPrint('Connection response error: $error');
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('সংযোগের উত্তর পাঠানো যায়নি: $error'),
+              content: Text(
+                accepted
+                    ? '$requesterName-এর সংযোগের অনুমতি পাঠানো হয়েছে।'
+                    : '$requesterName-এর অনুরোধ প্রত্যাখ্যান করা হয়েছে।',
+              ),
             ),
           );
         }
       }
-    }
+    } catch (error) {
+      debugPrint('Connection response error: $error');
 
-    _showingRequestDialog = false;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('সংযোগের উত্তর পাঠানো যায়নি: $error'),
+          ),
+        );
+      }
+    } finally {
+      _showingRequestDialog = false;
 
-    if (mounted && _pendingRequests.isNotEmpty) {
-      _showNextRequestDialog();
+      if (mounted && _pendingRequests.isNotEmpty) {
+        _showNextRequestDialog();
+      }
     }
   }
 
@@ -213,8 +234,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   final List<Message> _messages = [];
 
-  StreamSubscription<dynamic>? _messageSubscription;
-  StreamSubscription<dynamic>? _connectionSubscription;
+  StreamSubscription<String>? _messageSubscription;
+  StreamSubscription<String>? _connectionSubscription;
 
   bool _sending = false;
 
@@ -234,7 +255,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     _connectionSubscription = _bluetooth.connectionStream.listen(
-      (dynamic event) {
+      (String event) {
         if (mounted) setState(() {});
       },
       onError: (Object error) {
@@ -261,9 +282,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _handleIncomingMessage(dynamic rawMessage) {
-    if (rawMessage is! String) return;
-
+  void _handleIncomingMessage(String rawMessage) {
     try {
       final decoded = jsonDecode(rawMessage);
 
@@ -468,6 +487,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemCount: _messages.length,
                     itemBuilder: (context, index) {
                       final message = _messages[index];
+
                       final isMine =
                           message.senderId == DeviceService.deviceId;
 
