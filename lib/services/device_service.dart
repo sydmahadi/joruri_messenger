@@ -1,3 +1,4 @@
+
 import 'package:uuid/uuid.dart';
 
 import 'local_storage_service.dart';
@@ -6,37 +7,46 @@ class DeviceService {
   static const Uuid _uuid = Uuid();
 
   static Future<String> initialize() async {
-    String? deviceId = StorageService.getDeviceId();
+    String? deviceId = LocalStorageService.getDeviceId();
 
     if (deviceId == null || deviceId.isEmpty) {
       deviceId = _uuid.v4();
-      await StorageService.saveDeviceId(deviceId);
+      await LocalStorageService.saveDeviceId(deviceId);
     }
 
-    String? deviceName = StorageService.getDeviceName();
+    final deviceName = LocalStorageService.getDeviceName();
 
     if (deviceName == null || deviceName.isEmpty) {
-      await StorageService.saveDeviceName('আমার ফোন');
+      await LocalStorageService.saveDeviceName('আমার ফোন');
+    }
+
+    final location = LocalStorageService.getDeviceLocation();
+
+    if (location == null) {
+      await LocalStorageService.saveDeviceLocation('');
     }
 
     return deviceId;
   }
 
-  static String get deviceId {
-    return StorageService.getDeviceId() ?? '';
-  }
+  static String get deviceId =>
+      LocalStorageService.getDeviceId() ?? '';
 
-  static String get deviceName {
-    return StorageService.getDeviceName() ?? 'আমার ফোন';
-  }
+  static String get deviceName =>
+      LocalStorageService.getDeviceName() ?? 'আমার ফোন';
+
+  static String get deviceLocation =>
+      LocalStorageService.getDeviceLocation() ?? '';
 
   static Future<void> setDeviceName(String name) async {
-    final trimmedName = name.trim();
+    final value = name.trim();
 
-    if (trimmedName.isEmpty) {
-      return;
+    if (value.isNotEmpty) {
+      await LocalStorageService.saveDeviceName(value);
     }
+  }
 
-    await StorageService.saveDeviceName(trimmedName);
+  static Future<void> setDeviceLocation(String location) async {
+    await LocalStorageService.saveDeviceLocation(location.trim());
   }
 }
