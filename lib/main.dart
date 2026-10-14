@@ -41,9 +41,16 @@ class JoruriMessengerApp extends StatefulWidget {
 }
 
 class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
+  final GlobalKey<NavigatorState> _navigatorKey =
+      GlobalKey<NavigatorState>();
+
+  final GlobalKey<ScaffoldMessengerState> _messengerKey =
+      GlobalKey<ScaffoldMessengerState>();
+
   final List<Map<String, String>> _pendingRequests = [];
 
   StreamSubscription<String>? _messageSubscription;
+
   bool _showingRequestDialog = false;
 
   BluetoothService get _bluetooth => widget.bluetoothService;
@@ -61,43 +68,54 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
   }
 
   void _handleIncomingMessage(String rawMessage) {
+    debugPrint('MAIN: Incoming message received: $rawMessage');
+
     try {
-      final decoded = jsonDecode(rawMessage);
+      final dynamic decoded = jsonDecode(rawMessage);
 
       if (decoded is! Map) return;
 
-      if (decoded['type']?.toString() != 'connection_request') {
-        return;
-      }
+      final type = decoded['type']?.toString();
 
-      // BluetoothService sends senderId and senderName.
+      if (type != 'connection_request') return;
+
       final requesterId = decoded['senderId']?.toString() ?? '';
 
       final name = decoded['senderName']?.toString().trim();
+
       final requesterName =
           (name == null || name.isEmpty) ? 'অজানা ডিভাইস' : name;
 
       if (requesterId.isEmpty) {
-        debugPrint('Connection request এ senderId নেই: $rawMessage');
+        debugPrint(
+          'MAIN: Connection request has no senderId: $rawMessage',
+        );
         return;
       }
 
-      if (_pendingRequests.any(
+      final alreadyPending = _pendingRequests.any(
         (request) => request['requesterId'] == requesterId,
-      )) {
+      );
+
+      if (alreadyPending) {
+        debugPrint('MAIN: Duplicate pending request ignored.');
         return;
       }
-
-      if (!mounted) return;
 
       _pendingRequests.add({
         'requesterId': requesterId,
         'requesterName': requesterName,
       });
 
+      debugPrint(
+        'MAIN: Connection request queued from $requesterName '
+        '($requesterId)',
+      );
+
       _showNextRequestDialog();
-    } catch (error) {
-      debugPrint('Connection request parsing error: $error');
+    } catch (error, stackTrace) {
+      debugPrint('MAIN: Request parsing error: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
   }
 
@@ -105,6 +123,16 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
     if (!mounted ||
         _showingRequestDialog ||
         _pendingRequests.isEmpty) {
+      return;
+    }
+
+    final dialogContext = _navigatorKey.currentContext;
+
+    if (dialogContext == null) {
+      debugPrint(
+        'MAIN: Navigator context is not ready. '
+        'The request remains queued.',
+      );
       return;
     }
 
@@ -117,15 +145,24 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
     bool? accepted;
 
     try {
+      debugPrint(
+        'MAIN: Showing connection dialog for $requesterName',
+      );
+
       accepted = await showDialog<bool>(
-        context: context,
+        context: dialogContext,
+        useRootNavigator: true,
         barrierDismissible: false,
-        builder: (dialogContext) {
+        builder: (BuildContext dialogContext) {
           return AlertDialog(
+            icon: const Icon(
+              Icons.bluetooth_connected,
+              size: 36,
+            ),
             title: const Text('নতুন সংযোগের অনুরোধ'),
             content: Text(
-              '$requesterName আপনার সঙ্গে সংযুক্ত হতে চায়। '
-              'আপনি কি অনুমতি দেবেন?',
+              '$requesterName আপনার সঙ্গে সংযুক্ত হতে চায়।\n\n'
+              'আপনি কি সংযোগের অনুমতি দেবেন?',
             ),
             actions: [
               TextButton(
@@ -134,50 +171,59 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
                 },
                 child: const Text('প্রত্যাখ্যান'),
               ),
-              FilledButton(
+              FilledButton.icon(
                 onPressed: () {
                   Navigator.of(dialogContext).pop(true);
                 },
-                child: const Text('অনুমতি দিন'),
+                icon: const Icon(Icons.check),
+                label: const Text('অনুমতি দিন'),
               ),
             ],
           );
         },
       );
 
-      if (accepted != null) {
-        await _bluetooth.respondToConnectionRequest(
-          accepted: accepted,
-          requesterId: requesterId,
-        );
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                accepted
-                    ? '$requesterName-এর সংযোগের অনুমতি পাঠানো হয়েছে।'
-                    : '$requesterName-এর অনুরোধ প্রত্যাখ্যান করা হয়েছে।',
-              ),
-            ),
-          );
-        }
+      if (accepted == null) {
+        debugPrint('MAIN: Connection dialog closed without a choice.');
+        return;
       }
-    } catch (error) {
-      debugPrint('Connection response error: $error');
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('সংযোগের উত্তর পাঠানো যায়নি: $error'),
+      debugPrint(
+        'MAIN: Responding to $requesterName; accepted=$accepted',
+      );
+
+      await _bluetooth.respondToConnectionRequest(
+        accepted: accepted,
+        requesterId: requesterId,
+      );
+
+      _messengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(
+            accepted
+                ? '$requesterName-এর সংযোগের অনুমতি পাঠানো হয়েছে।'
+                : '$requesterName-এর অনুরোধ প্রত্যাখ্যান করা হয়েছে।',
           ),
-        );
-      }
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('MAIN: Connection response error: $error');
+      debugPrintStack(stackTrace: stackTrace);
+
+      _messengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text('সংযোগের উত্তর পাঠানো যায়নি: $error'),
+        ),
+      );
     } finally {
       _showingRequestDialog = false;
 
       if (mounted && _pendingRequests.isNotEmpty) {
-        _showNextRequestDialog();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _showNextRequestDialog();
+          }
+        });
       }
     }
   }
@@ -191,6 +237,8 @@ class _JoruriMessengerAppState extends State<JoruriMessengerApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navigatorKey,
+      scaffoldMessengerKey: _messengerKey,
       title: 'জরুরি মেসেঞ্জার',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -230,6 +278,7 @@ class _ChatScreenState extends State<ChatScreen> {
       TextEditingController();
 
   final ScrollController _scrollController = ScrollController();
+
   final Uuid _uuid = const Uuid();
 
   final List<Message> _messages = [];
@@ -256,7 +305,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
     _connectionSubscription = _bluetooth.connectionStream.listen(
       (String event) {
-        if (mounted) setState(() {});
+        debugPrint('Chat connection event: $event');
+
+        if (mounted) {
+          setState(() {});
+        }
       },
       onError: (Object error) {
         debugPrint('Connection stream error: $error');
@@ -283,8 +336,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _handleIncomingMessage(String rawMessage) {
+    debugPrint('CHAT: Incoming message: $rawMessage');
+
     try {
-      final decoded = jsonDecode(rawMessage);
+      final dynamic decoded = jsonDecode(rawMessage);
 
       if (decoded is! Map) return;
 
@@ -314,8 +369,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
       LocalStorageService.saveMessage(message);
       _scrollToBottom();
-    } catch (error) {
-      debugPrint('Incoming message error: $error');
+    } catch (error, stackTrace) {
+      debugPrint('Incoming chat message error: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
   }
 
@@ -357,8 +413,9 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
       _scrollToBottom();
-    } catch (error) {
+    } catch (error, stackTrace) {
       debugPrint('Send message error: $error');
+      debugPrintStack(stackTrace: stackTrace);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -395,7 +452,9 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
 
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _openConnectionScreen() async {
@@ -405,7 +464,9 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
 
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
